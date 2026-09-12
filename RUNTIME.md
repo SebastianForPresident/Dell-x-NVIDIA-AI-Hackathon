@@ -174,3 +174,54 @@ Changed files: `.gitignore`, `frontend/src/App.jsx`, `server/main.py`,
 `server/integration.py`, `tests/test_ai_review.py`; added `runtime/` adapter,
 runner and proof exporter, `tests/test_openclaw_runtime.py`,
 `scripts/start_demo.sh`, this handoff, and the exported proof JSON.
+
+## Live GPT-OSS briefing
+
+The claim screen now includes an investigation briefing under GPT-OSS. The
+plugin subscribes to the installed, documented
+`api.runtime.events.onAgentEvent` API and forwards only public `assistant`
+text events (`event.data.text`), never thinking events. Atomic, case-bound
+snapshots in `.runtime/streams` feed the API's SSE endpoint
+`GET /api/cases/{id}/agent-stream`. The React EventSource displays real output
+increments and actual tool results; there is no simulated typing. Snapshots are
+transient display data; final summaries and evidence remain persisted in MongoDB.
+
+Verified in Chromium with fresh run `1d8982b0eb854ff6aadbbb3066274e1e`:
+13 distinct partial model-text updates arrived while the run was active,
+then all four evidence checks, a saved report and READY_FOR_ADJUSTER_REVIEW.
+Browser errors: zero. Captured updates: `.runtime/browser/stream-updates.json`.
+Updated test suite: 37 tests, 35 passed, 2 obsolete tests skipped; React build passed.
+
+## Claim-first intake and smoother live briefing
+
+The default flow is now New claim: farmer/name, a user-written statement,
+field selection, loss date, reported cause and crop. Claim references can be
+generated. `POST /api/claims` saves a NEW investigation without executing tools;
+the Run investigation button starts the local model. The DeWitt field binds to
+its existing local synthetic evidence bundle. An unregistered field gets no
+measurements, with missing evidence handled by the existing tools/workflow gates.
+`GET /api/local-fields` exposes the limited supported coverage. No arbitrary
+county matching or real-data acquisition is implied.
+
+The page no longer calls POST /api/demo on load. Existing example history is
+hidden by default, preserved behind Show synthetic example history, and a new
+example is created only through Try a synthetic example. Own evidence uploads
+remain available under Advanced in the claim dialog.
+
+Streaming snapshots now arrive up to every 40ms. The browser smoothly reveals
+only already-received text, formats paragraphs/bold text, and keeps tool details
+collapsed. The briefing is above the full action timeline. Follow-up tasks are
+visible in What is still needed.
+
+Live browser validation:
+- Covered user-written claim `1ddaedee6d9ee0881fe6774359d3633b675e67516a00b3971dc1f55e94b929d0`:
+  149 distinct partial text updates, four evidence checks, saved report,
+  READY_FOR_ADJUSTER_REVIEW, zero browser errors.
+- Unregistered-field claim `bf570639c19ba76a85aff4b8dd923a8d169841d8f015f12e15f9b53338b2647e`:
+  four unavailable checks, one follow-up task, NEEDS_EVIDENCE, zero browser errors.
+- Read-only page navigation did not POST/create a claim.
+- 41 Python tests: 39 passed, 2 skipped. React production build passed.
+
+Screenshots and browser results remain under `.runtime/browser/`:
+`new-claim.png`, `intake-briefing.png`, `intake-result.json`, `missing-result.json`.
+These explicitly named rehearsal claims are preserved as verification history.

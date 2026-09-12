@@ -1,12 +1,15 @@
 """React API backed by InvestigationService and local OpenClaw/Ollama."""
 
+import asyncio
+import json
 from datetime import date
 import os
 from pathlib import Path
 from uuid import uuid4
+from typing import Literal
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo.errors import PyMongoError
@@ -15,7 +18,9 @@ from agent_assets import CaseAssets
 from agent_tools import AgentTools
 from forensics import field_names, markdown_report
 from runtime.run import run as run_agent
+from runtime.live import read_snapshot
 from server.database import get_service
+from server.intake import LOCAL_FIELDS, create_claim
 from server.integration import asset_root, demo, demo_step, project
 
 
@@ -51,6 +56,28 @@ def list_cases(service=Depends(get_service)):
     return [project(service, row["_id"]) for row in service.list_investigations()]
 
 
+class ClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    farm: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=10, max_length=2000)
+    field_id: Literal["dewitt-demo-field", "unregistered"]
+    cause: Literal["Drought", "Flood", "Other"]
+    crop: Literal["Corn", "Soybeans", "Winter wheat", "Other"]
+    loss_date: date
+    claim_id: str = Field(default="", max_length=100)
+    location: str = Field(default="", max_length=200)
+
+
+@app.get("/api/local-fields")
+def local_fields():
+    return LOCAL_FIELDS
+
+
+@app.post("/api/claims", status_code=201)
+def intake_claim(body: ClaimRequest, service=Depends(get_service)):
+    return project(service, create_claim(service, body))
+
+
 @app.post("/api/demo", status_code=201)
 def create_demo(service=Depends(get_service)):
     return project(service, demo(service).investigation_id)
@@ -84,6 +111,23 @@ def get_markdown_report(case_id: str, service=Depends(get_service)):
         raise HTTPException(409, "A final report has not been saved yet")
     content = markdown_report(package["report"])
     return PlainTextResponse(content, media_type="text/markdown")
+
+
+@app.get("/api/cases/{case_id}/agent-stream")
+async def agent_stream(case_id: str, request: Request, service=Depends(get_service)):
+    require_case(service, case_id)
+    async def events():
+        previous = None
+        while not await request.is_disconnected():
+            snapshot = json.dumps(read_snapshot(case_id))
+            if snapshot != previous:
+                yield f"data: {snapshot}\n\n"
+                previous = snapshot
+            else:
+                yield ": heartbeat\n\n"
+            await asyncio.sleep(0.04)
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/api/cases/{case_id}/investigate")

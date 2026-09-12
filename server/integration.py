@@ -85,7 +85,8 @@ def project(service, investigation_id):
                 ("Completed" if a["result"].get("ok", True) else str(a["result"].get("error"))),
                 "state": "complete" if a["result"].get("ok", True) else "error"} for a in actions]
     return {"id": investigation_id, "claim_id": record["claim_id"], "investigation_id": investigation_id,
-            "farm": meta.get("farm", meta["field"]), "location": meta.get("location", "Not supplied"),
+            "claim_description": meta.get("claim_description", ""),
+            "field": meta["field"], "farm": meta.get("farm", meta["field"]), "location": meta.get("location", "Not supplied"),
             "crop": meta.get("claimed_crop", "Not supplied"), "cause": meta["reported_cause"],
             "loss_date": meta["reported_loss_date"], "acreage": meta.get("acreage", 0),
             "created_at": record["created_at"].date().isoformat(), "status": record["status"],
