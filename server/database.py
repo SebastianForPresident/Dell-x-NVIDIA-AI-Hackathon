@@ -19,8 +19,12 @@ def initialize_database() -> None:
     cases.create_index("id", unique=True)
     cases.create_index("created_at")
     cases.create_index("synthetic_demo")
+    demo = demo_cases()
     if cases.count_documents({}) == 0:
-        cases.insert_many(demo_cases())
+        cases.insert_many(demo)
+    else:
+        # Add the featured synthetic walkthrough to an existing local database.
+        cases.update_one({"id": demo[0]["id"]}, {"$setOnInsert": demo[0]}, upsert=True)
 
 
 def case_document(case_id: str):

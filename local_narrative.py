@@ -46,3 +46,31 @@ def write_narrative(report: dict) -> str:
         "Never approve or deny a claim, infer causation, or invent data. Mention that the evidence is not a coverage determination.",
         json.dumps(report, separators=(",", ":")),
     )
+
+
+def analyze_structured_case(case: dict) -> dict:
+    """Ask local Qwen for a short review of measured, locally stored case data."""
+    payload = {
+        "claim": {key: case.get(key) for key in ("id", "crop", "cause", "loss_date", "location")},
+        "weather_series": case.get("weather_series", []),
+        "ndvi_series": case.get("ndvi_series", []),
+        "measured_findings": case["report"]["findings"],
+        "synthetic_demo": case.get("synthetic_demo", False),
+    }
+    answer = _local_chat(
+        "You assist a crop insurance adjuster. Review only the supplied structured local data. "
+        "Return one JSON object with exactly five short string fields: weather, vegetation, crop, "
+        "neighbors, overall. Explain what each finding does and does not support. If evidence is "
+        "missing or inconclusive, say so. Do not invent measurements, confidence scores, weather "
+        "sources, causes, or claim decisions. Do not approve or deny the claim. Output JSON only.",
+        json.dumps(payload, separators=(",", ":")),
+        max_tokens=900,
+    )
+    cleaned = answer.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    result = json.loads(cleaned)
+    keys = ("weather", "vegetation", "crop", "neighbors", "overall")
+    if not isinstance(result, dict) or any(not isinstance(result.get(key), str) or not result[key].strip() for key in keys):
+        raise ValueError("Qwen did not return all five evidence summaries")
+    return {key: result[key].strip()[:1200] for key in keys}

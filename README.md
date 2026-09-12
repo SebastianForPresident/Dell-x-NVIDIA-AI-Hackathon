@@ -1,6 +1,6 @@
-# Fieldnote — Crop Insurance Forensics
+# FieldTrace — Crop Insurance Forensics
 
-A local evidence assistant for crop insurance adjusters. A React dashboard presents case files, field geometry, rainfall and vegetation charts, source-backed findings, and a downloadable report. FastAPI performs deterministic geospatial checks; local MongoDB stores case metadata and evidence. Qwen, routed through NVIDIA OpenShell, can draft claim-field suggestions and report wording. The system never approves or denies a claim.
+A local evidence assistant for crop insurance adjusters. The React demo has three screens: Home, Dashboard, and Claim investigation. FastAPI measures weather, crop, vegetation, and neighboring-field evidence and saves it in local MongoDB. On the Claim screen, Qwen receives the structured local case data through NVIDIA OpenShell and writes five short interpretations for an adjuster. The measured findings remain available if Qwen is offline. The system never approves or denies a claim.
 The merged repository also contains an optional [investigation history module](PERSISTENCE.md) for follow-up tasks and audit records. The React app currently uses its own `server/database.py` case collection; that module is not connected to the website.
 
 Every built-in case is **synthetic** and labeled as such. The demo weather, crop, imagery, farm names, and field polygons are fabricated; they are not NOAA, USDA, or satellite observations.
@@ -17,7 +17,9 @@ cd frontend && npm install && npm run build && cd ..
 .venv/bin/uvicorn server.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open **http://127.0.0.1:8000**. The API seeds three synthetic case records into MongoDB only when the collection is empty. The website reads them from the API; there is no hard-coded frontend fallback. Existing records are preserved on restart. For frontend development, run `cd frontend && npm run dev` in a second terminal and open **http://127.0.0.1:5173**; Vite proxies `/api` to FastAPI.
+Open **http://127.0.0.1:8000**. The API seeds four synthetic case records into an empty MongoDB collection. It also adds the featured `CLM-2841` walkthrough to an existing collection if missing, without replacing saved cases. The website reads records from the API; there is no hard-coded frontend fallback. For frontend development, run `cd frontend && npm run dev` in a second terminal and open **http://127.0.0.1:5173**; Vite proxies `/api` to FastAPI.
+
+For the demo, open **Home → Dashboard → CLM-2841**. The saved synthetic evidence is ready to inspect immediately. Click **Run local Qwen review** on the claim page when the OpenShell model route is connected; the model's response is stored with the case and appears alongside the four measured findings. The progress display distinguishes saved measurements from the actual Qwen request. The dashboard shows saved workflow stages, not simulated live agent events. On a development machine without OpenShell, the Qwen request shows an unavailable message while the evidence report still works.
 
 The new-investigation form accepts a GeoJSON field boundary and optional weather CSV, crop layer, before/after rasters, and PDF. It saves the report, chart data, source file names, and SHA-256 hashes to MongoDB. Raw GeoTIFFs are processed from temporary files and discarded. PDF text is retained locally for optional Qwen field suggestions; the raw PDF is not retained.
 

@@ -18,7 +18,7 @@ from forensics import (
     Finding, build_report, crop_finding, field_names, load_boundary, markdown_report,
     ndvi_mean, neighbors_finding, parse_weather, vegetation_finding, weather_finding,
 )
-from local_narrative import check_local_model, extract_claim_fields, write_narrative
+from local_narrative import analyze_structured_case, check_local_model, extract_claim_fields, write_narrative
 from server.database import case_document, cases, client, initialize_database
 
 
@@ -85,7 +85,14 @@ def get_case(case_id: str):
 @app.get("/api/cases/{case_id}/report.md")
 def get_markdown_report(case_id: str):
     doc = _get_case(case_id)
-    return PlainTextResponse(markdown_report(doc["report"]), media_type="text/markdown")
+    report = markdown_report(doc["report"])
+    if doc.get("ai_review"):
+        report += "\n## Local Qwen interpretation — adjuster review required\n\n"
+        for key, label in (("weather", "Weather"), ("vegetation", "Vegetation"),
+                           ("crop", "Crop"), ("neighbors", "Neighbor fields"),
+                           ("overall", "Overall evidence")):
+            report += f"### {label}\n\n{doc['ai_review'][key]}\n\n"
+    return PlainTextResponse(report, media_type="text/markdown")
 
 
 @app.post("/api/runtime/check-model")
@@ -106,6 +113,17 @@ def draft_narrative(case_id: str):
         raise HTTPException(status_code=503, detail=f"OpenShell/Qwen inference unavailable: {exc}") from exc
     cases.update_one({"id": case_id}, {"$set": {"narrative": narrative}})
     return {"narrative": narrative}
+
+
+@app.post("/api/cases/{case_id}/ai-review")
+def review_case_with_qwen(case_id: str):
+    doc = _get_case(case_id)
+    try:
+        review = analyze_structured_case(doc)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"OpenShell/Qwen review unavailable: {exc}") from exc
+    cases.update_one({"id": case_id}, {"$set": {"ai_review": review}})
+    return {"ai_review": review}
 
 
 @app.post("/api/cases/{case_id}/claim-suggestions")

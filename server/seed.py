@@ -67,6 +67,9 @@ def _case(case_id: str, farm: str, location: str, crop: str, cause: str, loss: d
 
 def demo_cases() -> list[dict]:
     return [
+        _case("CLM-2841", "Prairie View Farms", "Story County, IA", "Corn",
+              "Drought", date(2026, 7, 18), 31.5, 90, 0.72, 0.44,
+              [-0.19, -0.22], (-93.65, 42.02), 127, "Evidence ready"),
         _case("CI-2026-0418", "Mason Creek Farms", "Tompkins County, NY", "Corn",
               "Drought", date(2026, 7, 18), 30, 90, 0.72, 0.44,
               [-0.19, -0.22], (-76.50, 42.45), 184, "Evidence ready"),
