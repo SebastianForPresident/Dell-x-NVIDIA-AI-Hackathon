@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import fieldTraceLogo from './assets/fieldtrace-logo.png'
+import { deterministicBriefing, evidenceSemantics, hasLocalEvidence, presentationCaseStatus } from './presentation.js'
 import {
   Activity, ArrowRight, Check, CheckCircle2, ChevronRight, CloudRain,
   Database, Download, FileText, Leaf, MapPin, Menu, Plus, ShieldCheck,
@@ -33,27 +34,6 @@ function dateLabel(value) {
 function statusLabel(status) {
   return status === 'observed' ? 'Observed' : status === 'supported' ? 'Supported' : status === 'contradicted' ? 'Contradicted' :
     status === 'inconclusive' ? 'Inconclusive' : 'Unavailable'
-}
-
-function evidenceSemantics(investigation) {
-  const findings = investigation.report?.findings || []
-  const contradicted = findings.filter(item => item.status === 'contradicted').length
-  const unavailable = findings.filter(item => ['unavailable', 'inconclusive'].includes(item.status)).length
-  const displayStatus = finding => contradicted > 0 && finding.status === 'supported' &&
-    ['Vegetation change', 'Other supplied fields'].includes(finding.check) ? 'observed' : finding.status
-  return { findings, contradicted, unavailable, displayStatus,
-    observed: findings.filter(item => displayStatus(item) === 'observed').length }
-}
-
-function presentationCaseStatus(investigation) {
-  const { contradicted, unavailable } = evidenceSemantics(investigation)
-  return contradicted > 0 && unavailable === 0 ? 'Contradicted — human review required' : caseStatus(investigation.status)
-}
-
-function hasLocalEvidence(investigation) {
-  if (typeof investigation.local_evidence_available === 'boolean') return investigation.local_evidence_available
-  const findings = investigation.report?.findings || []
-  return findings.some(item => !['unavailable', 'inconclusive'].includes(item.status)) || (investigation.documents?.length || 0) > 1
 }
 
 function caseStatus(status) {
@@ -112,31 +92,6 @@ function sourceName(dataset) {
     .replace('Sentinel-2 MSI Level-2A BOA reflectance', 'Sentinel-2 Level-2A')
     .replace('Cropland Data Layer 2025 derived analysis areas', 'Cropland Data Layer')
   return `${dataset.provider || 'Source'} ${product}`
-}
-
-function presentationBriefing(text, investigation) {
-  const { contradicted, unavailable } = evidenceSemantics(investigation)
-  const reviewStatus = contradicted > 0 && unavailable === 0 ? 'Contradicted — human review required' : 'Needs evidence'
-  let result = text.replaceAll('READY_FOR_ADJUSTER_REVIEW', 'Ready for adjuster review')
-    .replaceAll('NEEDS_EVIDENCE', reviewStatus)
-    .replaceAll('INVESTIGATING', 'Investigation in progress')
-    .replace(/align with (?:a )?drought-related crop loss/gi, 'are consistent with drought-related crop stress')
-    .replace(/consistent with a drought-related crop loss/gi, 'consistent with drought-related crop stress')
-    .replace(/claim supported/gi, 'reported conditions supported by evidence')
-    .replace(/^Synthetic demo:\s*(?:No\.?\s*)?(?: {2})?\n?/i, '')
-    .replace(/^Evidence review:\s*,?\s*this is a real case\.?\s*(?: {2})?\n?/gim, '')
-    .replace(/Report saved\s*\(ID[^)]+\)\.?/gi, 'Report saved.')
-    .replace(/(?:A )?follow[‐‑–—-]?up task\s*\(ID[^)]+\)\s*(?:is|was)?\s*(?:created|requested)?/gi, 'Follow-up requested')
-  if (contradicted > 0) {
-    result = result.replace(/supporting damage/gi, 'recording vegetation stress without establishing the reported cause')
-      .replace(/supporting a regional event/gi, 'recording similar stress in comparison areas without validating the reported crop or cause')
-      .replace(/Follow-up requested[\s\S]*$/i, 'Follow-up requested. Contradictory evidence requires human review.')
-  }
-  const rainfall = investigation.report?.findings?.find(item => item.check === 'Precipitation')?.values
-  if (rainfall?.percent_of_normal != null) {
-    result = result.replace(/≈?\d+(?:\.\d+)?\s*% of normal/gi, `${Number(rainfall.percent_of_normal).toFixed(1)}% of normal`)
-  }
-  return result
 }
 
 function EvidenceAssessment({ investigation }) {
@@ -322,32 +277,6 @@ function ClaimModal({ onClose, onCreated, onAdvanced }) {
   </div>
 }
 
-function useReceivedText(text, streaming) {
-  const [displayed, setDisplayed] = useState(text)
-  const target = useRef(text)
-  const current = useRef(text)
-  const active = useRef(streaming)
-  useEffect(() => { target.current = text; active.current = streaming }, [text, streaming])
-  useEffect(() => {
-    let frame
-    let last = 0
-    function render(now) {
-      if (now - last >= 16 && current.current !== target.current) {
-        const next = target.current
-        // Only reveal text already received. Revisions and saved reports apply immediately.
-        current.current = !active.current || !next.startsWith(current.current)
-          ? next : next.slice(0, current.current.length + Math.max(2, Math.ceil((next.length - current.current.length) / 5)))
-        setDisplayed(current.current)
-        last = now
-      }
-      frame = requestAnimationFrame(render)
-    }
-    frame = requestAnimationFrame(render)
-    return () => cancelAnimationFrame(frame)
-  }, [])
-  return displayed
-}
-
 function BriefingText({ text }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({ children }) => <div className="markdown-table"><table>{children}</table></div> }}>{text}</ReactMarkdown>
 }
@@ -362,13 +291,12 @@ function AgentReport({ investigation }) {
   }, [investigation.id])
   const running = live?.state === 'running'
   const completed = live?.state === 'complete' || !!investigation.agent_run
-  const text = live?.text || (!running && investigation.agent_run?.summary) || ''
-  const displayedText = useReceivedText(presentationBriefing(text, investigation), running)
+  const displayedText = deterministicBriefing(running ? { ...investigation, status: 'INVESTIGATING' } : investigation)
 
   return <section className="surface agent-report" aria-label="GPT-OSS live report">
-    <div className="surface-heading"><div><span className="eyebrow">GPT-OSS · LOCAL ON GB10</span><h2>Investigation briefing</h2></div><span className={`count-tag ${running ? 'streaming' : ''}`}>{running ? (text ? 'Writing briefing' : 'Inspecting evidence') : live?.state === 'failed' ? 'Run interrupted' : text ? 'Saved briefing' : completed ? 'No briefing returned' : 'Awaiting investigation'}</span></div>
-    <p className="muted">Live model output and measured tool results. {investigation.synthetic_demo ? 'This case uses synthetic evidence.' : 'Human adjuster review required.'}</p>
-    <div className="agent-report-text" aria-live="polite">{displayedText ? <BriefingText text={displayedText} /> : (running ? 'The local model is reviewing the claim and selecting evidence checks…' : completed ? 'The investigation completed without a model briefing. Review the measured findings and follow-up tasks below.' : 'Start the investigation below to receive a briefing from the local model.')}</div>
+    <div className="surface-heading"><div><span className="eyebrow">GPT-OSS · LOCAL ON GB10</span><h2>Investigation briefing</h2></div><span className={`count-tag ${running ? 'streaming' : ''}`}>{running ? 'Inspecting evidence' : live?.state === 'failed' ? 'Run interrupted' : completed ? 'Saved briefing' : 'Awaiting investigation'}</span></div>
+    <p className="muted">Application-validated summary of persisted claim data and measured findings. {investigation.synthetic_demo ? 'This case uses synthetic evidence.' : 'Human adjuster review required.'}</p>
+    <div className="agent-report-text" aria-live="polite"><BriefingText text={displayedText} /></div>
     {running && <div className="live-progress"><Activity size={15} /><span>{live.tools?.find(tool => tool.state === 'running')?.name.replaceAll('_', ' ') || `${live.tools?.filter(tool => tool.state === 'complete').length || 0} evidence actions completed`}</span></div>}
     {!!live?.tools?.length && <details className="agent-live-tools"><summary>Evidence inspected · {live.tools.filter(tool => tool.state === 'complete').length} completed actions</summary>{live.tools.map(tool => <div key={tool.id}><strong>{tool.name.replaceAll('_', ' ')}</strong><span>{tool.state === 'running' ? 'Measuring…' : tool.finding?.detail || (tool.state === 'failed' ? 'Could not complete this check' : 'Saved')}</span>{tool.finding && <small>Source: {tool.finding.source}</small>}</div>)}</details>}
     <div className="assessment-note"><ShieldCheck size={18} /> Evidence briefing only. The human adjuster makes the decision.</div>
@@ -467,7 +395,7 @@ export default function App() {
           {actionError && <p className="error-message">{actionError}</p>}
         </div>
           <section className="surface evidence-section"><div className="surface-heading"><div><span className="eyebrow">SOURCE-BACKED FINDINGS</span><h2>Evidence summary</h2></div><span className="count-tag">{selected.report.findings.length} checks</span></div><div className="evidence-grid">{evidenceOrder.map(({ check, label, key, icon: Icon }) => { const finding = selected.report.findings.find(item => item.check === check); if (!finding) return null; const displayStatus = evidenceSemantics(selected).displayStatus(finding); return <div className="evidence-card" key={key}><div className="evidence-card-top"><span className="evidence-icon"><Icon size={20} /></span><span className={`finding-status ${displayStatus}`}>{statusLabel(displayStatus)}</span></div><h3>{label}</h3><p>{presentationFindingSummary(finding, displayStatus, selected)}</p><SourceDetails finding={finding} /></div> })}</div></section>
-          <section className="surface assessment"><span className="eyebrow">FORENSIC EVIDENCE SUMMARY</span><h2>{evidenceSemantics(selected).contradicted > 0 ? `${evidenceSemantics(selected).contradicted} findings contradict reported conditions` : evidenceSemantics(selected).unavailable > 0 ? `${evidenceSemantics(selected).unavailable} checks require additional evidence` : `${selected.report.evidence_summary.supported} of ${selected.report.findings.length} checks supported`}</h2><p>{selected.report.assessment}</p><div className="assessment-note"><ShieldCheck size={18} /> FieldTrace does not approve or deny claims. A qualified adjuster reviews this evidence.</div><div className="report-actions"><button className="button secondary" onClick={() => setReportOpen(!reportOpen)}><FileText size={17} /> {reportOpen ? 'Hide report' : 'View report'}</button>{selected.report_saved && <a className="button secondary" href={`/api/cases/${encodeURIComponent(selected.id)}/report.md`} download={`${selected.id}-evidence.md`}><Download size={17} /> Download Markdown</a>}</div>{reportOpen && <div className="report-details"><h3>Measured findings</h3>{selected.report.findings.map(finding => { const displayStatus = evidenceSemantics(selected).displayStatus(finding); return <div key={finding.check}><strong>{finding.check} · {statusLabel(displayStatus)}</strong><p>{presentationFindingSummary(finding, displayStatus, selected)}</p><small>{finding.source}</small></div>})}<h3>Agent response</h3><BriefingText text={presentationBriefing(selected.agent_run?.summary || 'No completed agent run saved yet.', selected)} /><h3>Method</h3><p>{selected.report.method}</p><details className="technical-audit"><summary>Technical audit</summary><pre>{JSON.stringify(selected.actions, null, 2)}</pre></details></div>}</section>
+          <section className="surface assessment"><span className="eyebrow">FORENSIC EVIDENCE SUMMARY</span><h2>{evidenceSemantics(selected).contradicted > 0 ? `${evidenceSemantics(selected).contradicted} findings contradict reported conditions` : evidenceSemantics(selected).unavailable > 0 ? `${evidenceSemantics(selected).unavailable} checks require additional evidence` : `${selected.report.evidence_summary.supported} of ${selected.report.findings.length} checks supported`}</h2><p>{selected.report.assessment}</p><div className="assessment-note"><ShieldCheck size={18} /> FieldTrace does not approve or deny claims. A qualified adjuster reviews this evidence.</div><div className="report-actions"><button className="button secondary" onClick={() => setReportOpen(!reportOpen)}><FileText size={17} /> {reportOpen ? 'Hide report' : 'View report'}</button>{selected.report_saved && <a className="button secondary" href={`/api/cases/${encodeURIComponent(selected.id)}/report.md`} download={`${selected.id}-evidence.md`}><Download size={17} /> Download Markdown</a>}</div>{reportOpen && <div className="report-details"><h3>Measured findings</h3>{selected.report.findings.map(finding => { const displayStatus = evidenceSemantics(selected).displayStatus(finding); return <div key={finding.check}><strong>{finding.check} · {statusLabel(displayStatus)}</strong><p>{presentationFindingSummary(finding, displayStatus, selected)}</p><small>{finding.source}</small></div>})}<h3>Validated briefing</h3><BriefingText text={deterministicBriefing(selected)} /><h3>Method</h3><p>{selected.report.method}</p><details className="technical-audit"><summary>Technical audit</summary><pre>{JSON.stringify(selected.actions, null, 2)}</pre></details></div>}</section>
         </section></div>
     </> : <div className="page-state">No claim selected. Create a new claim from the dashboard to begin.</div>}</main>}
     <footer className="site-footer"><span>FieldTrace · Crop insurance evidence assistant</span><span>Local data · Human review · OpenClaw · Ollama · gpt-oss:20b</span></footer>
