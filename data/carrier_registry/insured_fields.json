@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "description": "Fictional carrier records for the FieldTrace hackathon demonstration.",
+  "fields": [
+    {
+      "policy_id": "POL-2025-00421",
+      "farm_id": "FARM-001",
+      "farm_name": "Prairie View Farms",
+      "field_id": "FIELD-17",
+      "field_name": "North 40",
+      "crop_year": 2025,
+      "insured_crop": "Corn",
+      "insured_acres": 66.4,
+      "location": "DeWitt County, Illinois",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-88.9045, 40.1480],
+          [-88.8980, 40.1484],
+          [-88.8976, 40.1524],
+          [-88.9040, 40.1520],
+          [-88.9045, 40.1480]
+        ]]
+      },
+      "evidence_package_id": "dewitt-public-2025-v1",
+      "evidence": {
+        "boundary": "field_context.geojson",
+        "weather": "noaa_ghcn_daily.csv",
+        "crop": "usda_cdl_2025.tif",
+        "before": "sentinel2_before.tif",
+        "after": "sentinel2_after.tif",
+        "before_date": "2025-08-09",
+        "after_date": "2025-09-26",
+        "weather_start": "2025-08-20",
+        "weather_end": "2025-09-18",
+        "default_loss_date": "2025-09-18"
+      }
+    },
+    {
+      "policy_id": "POL-2025-00808",
+      "farm_id": "FARM-002",
+      "farm_name": "High Plains Demo Farm",
+      "field_id": "FIELD-KS-04",
+      "field_name": "South Quarter",
+      "crop_year": 2025,
+      "insured_crop": "Winter wheat",
+      "insured_acres": 79.1,
+      "location": "Finney County, Kansas",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-100.9300, 37.9500],
+          [-100.9180, 37.9500],
+          [-100.9180, 37.9590],
+          [-100.9300, 37.9590],
+          [-100.9300, 37.9500]
+        ]]
+      },
+      "evidence_package_id": null,
+      "evidence": null
+    }
+  ]
+}

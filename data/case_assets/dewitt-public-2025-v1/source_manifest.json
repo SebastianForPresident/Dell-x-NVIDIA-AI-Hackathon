@@ -1,9 +1,17 @@
 {
   "package_id": "dewitt-public-2025-v1",
   "claim_scenario": "fictional",
-  "analysis_area": "CDL-derived crop analysis area; not a parcel boundary",
+  "analysis_area": "Fictional carrier insured-field boundary with CDL-derived comparison areas",
   "loss_date": "2025-09-18",
   "datasets": {
+    "boundary": {
+      "provider": "Fictional carrier registry",
+      "product": "Demo insured-field boundary",
+      "field_id": "FIELD-17",
+      "field_name": "North 40",
+      "note": "Fictional hackathon carrier record; not a real policyholder boundary.",
+      "local_file": "field_context.geojson"
+    },
     "crop": {
       "provider": "USDA NASS",
       "product": "Cropland Data Layer",
@@ -43,26 +51,26 @@
     }
   },
   "processing": {
-    "crop": "Dominant CDL class inside USDA-derived analysis geometry",
+    "crop": "Dominant CDL class inside the carrier-registry insured geometry",
     "weather": "30-day total and sum of 1991\u20132020 calendar-day means",
     "vegetation": "Mean NDVI=(B08-B04)/(B08+B04) over valid pixels"
   },
   "files": {
-    "analysis_areas.geojson": {
-      "sha256": "772a2494d90c85ae833e04d863729665560f7ea1f96aa9359663ffeb8f27a882",
-      "bytes": 36478
+    "field_context.geojson": {
+      "sha256": "499735e46fcb7abcfb2270475989bb0b515778487a614998f8243230cb7bfda2",
+      "bytes": 19173
     },
     "usda_cdl_2025.tif": {
       "sha256": "27fe55776b2ab9ff26560fdbb02672bab1676793bae41c4a6fd319a13b684b1b",
       "bytes": 13308
     },
     "sentinel2_before.tif": {
-      "sha256": "7e53344713ddfe1ffdbaa43525b02011d4eb6131401693f3d640ed4c5e405683",
-      "bytes": 98678
+      "sha256": "02008a5496ed1bc86b4cbeb150bdf231c765407a2d9ad5fef772c410df86a7eb",
+      "bytes": 53598
     },
     "sentinel2_after.tif": {
-      "sha256": "9cdc69f05a35e68f0940192d60866efa98f6de03d6705bf862df56c96087f8ab",
-      "bytes": 117429
+      "sha256": "d46f959d18e78fd2f8aeeda961125d1660def2d755383d1b35dad92c3f4e321a",
+      "bytes": 63674
     },
     "noaa_ghcn_daily.csv": {
       "sha256": "bdfc60f916e7d6e1b57a4bd18ef98d9ce0332c7a1c0f75a85500afe330c77f56",

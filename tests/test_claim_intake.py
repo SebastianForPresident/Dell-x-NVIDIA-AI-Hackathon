@@ -30,9 +30,10 @@ class ClaimIntakeTests(unittest.TestCase):
 
     def test_catalog_and_listing_do_not_seed_claims(self):
         fields = self.client.get('/api/local-fields').json()
-        self.assertEqual(len(fields), 2)
+        self.assertEqual(len(fields), 3)
         self.assertFalse(fields[0]['synthetic'])
-        self.assertTrue(fields[1]['synthetic'])
+        self.assertFalse(fields[1]['synthetic'])
+        self.assertTrue(fields[2]['synthetic'])
         self.assertEqual(self.client.get('/api/cases').json(), [])
 
     def test_public_evidence_claim_has_real_provenance_and_measurements(self):
@@ -48,8 +49,57 @@ class ClaimIntakeTests(unittest.TestCase):
             vegetation = tool.invoke('check_vegetation_change', {}, 'real-ndvi')['data']['finding']
             self.assertEqual(rainfall['values']['rainfall_mm'], 1.3)
             self.assertEqual(rainfall['provenance']['datasets'][0]['provider'], 'NOAA NCEI')
-            self.assertEqual(vegetation['values']['change'], -0.541)
+            self.assertEqual(vegetation['values']['change'], -0.403)
             self.assertEqual(vegetation['provenance']['datasets'][0]['provider'], 'Copernicus/ESA')
+
+    def test_same_registered_field_ignores_claim_hypotheses_when_binding_evidence(self):
+        repository_assets = os.path.abspath('data/case_assets')
+        with patch.dict(os.environ, {'CROP_ASSET_DIR': repository_assets}):
+            truthful = {**self.body, 'field_id': 'FIELD-17', 'loss_date': '2025-09-18'}
+            false_story = {**truthful, 'crop': 'Soybeans', 'cause': 'Flood',
+                           'description': 'The claimant reports soybeans damaged by flooding in this field.'}
+            first = self.client.post('/api/claims', json=truthful).json()
+            second = self.client.post('/api/claims', json=false_story).json()
+            self.assertEqual(first['field_id'], second['field_id'])
+            self.assertEqual(first['boundary'], second['boundary'])
+            self.assertEqual(first['documents'], second['documents'])
+            first_crop = bound_tools(self.service, first['id']).invoke('check_crop_classification', {}, 'crop-a')['data']['finding']
+            second_crop = bound_tools(self.service, second['id']).invoke('check_crop_classification', {}, 'crop-b')['data']['finding']
+            first_rain = bound_tools(self.service, first['id']).invoke('check_rainfall', {}, 'rain-a')['data']['finding']
+            second_rain = bound_tools(self.service, second['id']).invoke('check_rainfall', {}, 'rain-b')['data']['finding']
+            self.assertEqual(first_crop['values'], second_crop['values'])
+            self.assertEqual(first_rain['values'], second_rain['values'])
+            self.assertEqual(first_crop['status'], 'supported')
+            self.assertEqual(second_crop['status'], 'contradicted')
+            self.assertEqual(first_rain['status'], 'supported')
+            self.assertEqual(second_rain['status'], 'contradicted')
+
+    def test_registered_evidence_checks_need_no_external_network(self):
+        repository_assets = os.path.abspath('data/case_assets')
+        with patch.dict(os.environ, {'CROP_ASSET_DIR': repository_assets}):
+            case = self.client.post('/api/claims', json={**self.body, 'field_id': 'FIELD-17',
+                                                         'loss_date': '2025-09-18'}).json()
+            tools = bound_tools(self.service, case['id'])
+            with patch('urllib.request.urlopen', side_effect=AssertionError('external network attempted')), \
+                    patch('socket.create_connection', side_effect=AssertionError('external network attempted')):
+                findings = [tools.invoke(name, {}, f'offline-{index}')['data']['finding']
+                            for index, name in enumerate(('check_crop_classification', 'check_rainfall',
+                                                          'check_vegetation_change', 'compare_neighboring_fields'))]
+            self.assertTrue(all(finding['status'] == 'supported' for finding in findings))
+
+    def test_registered_field_without_local_evidence_never_borrows_another_package(self):
+        body = {**self.body, 'field_id': 'FIELD-KS-04', 'crop': 'Winter wheat',
+                'description': 'The claimant reports drought damage on the registered Kansas field.'}
+        case = self.client.post('/api/claims', json=body).json()
+        self.assertEqual(case['field_id'], 'FIELD-KS-04')
+        self.assertEqual(case['location'], 'Finney County, Kansas')
+        self.assertEqual(len(case['boundary']['features']), 1)
+        tool = bound_tools(self.service, case['id'])
+        rainfall = tool.invoke('check_rainfall', {}, 'ks-rain')['data']['finding']
+        crop = tool.invoke('check_crop_classification', {}, 'ks-crop')['data']['finding']
+        self.assertEqual(rainfall['status'], 'unavailable')
+        self.assertEqual(crop['status'], 'unavailable')
+        self.assertEqual(rainfall['values'], {})
 
     def test_written_claim_binds_local_assets_without_running_tools(self):
         response = self.client.post('/api/claims', json=self.body)

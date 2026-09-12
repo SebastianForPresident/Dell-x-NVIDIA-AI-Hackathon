@@ -1,5 +1,21 @@
 # GB10 runtime handoff — verified 2026-09-12
 
+## Current carrier-registry flow
+
+The current intake resolves insured fields through
+`data/carrier_registry/insured_fields.json`. Carrier and policy records are
+fictional. `FIELD-17` uses a carrier-defined DeWitt field polygon with locally
+cached real NOAA NCEI, USDA NASS CDL, and Copernicus Sentinel-2 evidence.
+`FIELD-KS-04` has different carrier geometry and no matching local public
+evidence, so its checks return unavailable and the agent requests follow-up.
+Claimed crop, cause, and narrative do not select or change either package.
+
+The sections below preserve the chronological runtime proof, including earlier
+synthetic fixture runs. They describe artifacts retained on this machine and
+must not be read as the current field-resolution design. The active model route
+remains OpenClaw → local Ollama → `gpt-oss:20b`, with no fallbacks or runtime
+public-data downloads.
+
 The actual React → FastAPI → OpenClaw → local Ollama → gpt-oss:20b →
 validated Python tools → InvestigationService → MongoDB chain passed on this
 machine. A fresh browser-driven DeWitt investigation reached

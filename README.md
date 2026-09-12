@@ -1,55 +1,70 @@
 # FieldTrace — Crop Insurance Forensics
 
-FieldTrace prepares source-backed crop-loss evidence for a human insurance adjuster. The React website calls FastAPI, which uses one `InvestigationService` and a local MongoDB. Crop, rainfall, vegetation, and neighboring-field checks run against local files; their findings, actions, status changes, and report are saved together as an investigation. The app never approves or denies a claim.
+FieldTrace is a local evidence assistant for crop-insurance adjusters. It resolves a fictional carrier policy and insured field from a local registry, evaluates locally cached public weather, crop, and satellite evidence against the insured geometry, and prepares a reviewable report. The adjuster makes the insurance decision.
 
-The built-in DeWitt County, Illinois case is **synthetic**. Its weather, crop layer, imagery, farm, and field boundaries are fabricated for demonstration. They are not NOAA, USDA, or satellite observations.
+The claim statement is a hypothesis. Reported crop, cause, and narrative never select the field or its evidence. The carrier registry supplies field identity and geometry; USDA Cropland Data Layer classifications are evidence about what was observed inside that boundary.
+
+## Data model
+
+`data/carrier_registry/insured_fields.json` contains fictional carrier and policy records. `FIELD-17` is the fictional Prairie View Farms North 40 policy in DeWitt County, Illinois. Its evidence package uses cached real public data from NOAA NCEI, USDA NASS CDL, and Copernicus Sentinel-2. `FIELD-KS-04` is a second fictional carrier field with distinct Kansas geometry and intentionally unavailable local public evidence.
+
+The normal intake flow is **insured farm → insured field → claim story**. Two claims against `FIELD-17` always receive the same carrier geometry and evidence, even when one reports corn/drought and another reports soybeans/flooding. The findings can therefore support one story and contradict the other. Selecting `FIELD-KS-04` produces its own geometry and unavailable findings followed by a request for evidence; it never borrows DeWitt measurements.
+
+Synthetic fixtures remain available only as clearly labeled regression/demo history. Carrier records are fictional. Public evidence provenance is stored with each evidence package.
 
 ## Start locally
 
-Use Python 3.12+, Node 22.12+, and Docker with Compose. From the project root:
+Ollama and MongoDB must be running. On the configured GB10 machine, run:
 
 ```bash
-docker compose up -d mongo
-export MONGODB_URI='mongodb://127.0.0.1:27017'
-export MONGODB_DATABASE='crop_forensics'
-export CROP_ASSET_DIR='./data/case_assets'
+./scripts/start_demo.sh
+```
+
+Open **http://127.0.0.1:8000**. The launcher reuses a healthy server already listening on port 8000 instead of trying to bind a second copy.
+
+For a fresh checkout, install and build first:
+
+```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-npm --prefix frontend ci --no-audit --no-fund
-npm --prefix frontend run build
-.venv/bin/python -m uvicorn server.main:app --host 127.0.0.1 --port 8000
+.venv/bin/python -m pip install -r requirements-dev.txt
+npm ci --prefix frontend
+npm run build --prefix frontend
+docker compose up -d mongo
+./scripts/start_demo.sh
 ```
 
-Open **http://127.0.0.1:8000**. For frontend development, run `npm --prefix frontend run dev` in another terminal and open **http://127.0.0.1:5173**. Vite proxies `/api` to FastAPI. The `.env.example` file lists settings but is not loaded automatically.
+For frontend development, run `npm run dev --prefix frontend` and open **http://127.0.0.1:5173**. Vite proxies `/api` to FastAPI.
 
-## Demo path
+## Judge demo
 
-Open **Home → Dashboard → DeWitt demo claim**. Click **Run investigation** to run four real deterministic evidence checks, save the report, and mark the package ready for adjuster review. Each step is stored in MongoDB and displayed on the claim page. **Run fresh investigation** creates a new run while preserving the earlier one. The Dashboard shows saved actions, not simulated live telemetry.
+Create a claim, select **Prairie View Farms → North 40**, choose July 18, 2026, and report corn damaged by drought. Run the investigation to show the local agent selecting registered tools and producing measured evidence. Then create a second claim for the same field that reports soybeans and flooding: geometry and measured values remain identical while crop and rainfall findings contradict the story. A claim on **High Plains Demo Farm → South Quarter** shows a different insured geometry and an honest `NEEDS_EVIDENCE` result.
 
-Once a measured report exists, **Run local Qwen review** sends the structured claim, weather, NDVI, and measured findings to the fixed OpenShell route `https://inference.local/v1/chat/completions`. If the route is available, five short interpretations are saved with the same investigation and included in the downloadable Markdown report. If it is unavailable, the measured evidence and report still work. Qwen does not choose tool calls or decide the claim. This inference route has not been verified on the GB10 yet.
+The active runtime path is:
 
-The import form accepts a GeoJSON field boundary and optional weather CSV, crop-layer GeoTIFF, before/after GeoTIFFs, and claim PDF. The current unified backend keeps a copy of uploaded assets under `CROP_ASSET_DIR` so an investigation can be reopened and its tools can read the same files. This directory is excluded from Git. A complete synthetic upload package can be generated with `.venv/bin/python scripts/generate_sample_case.py`.
+```text
+React → FastAPI → OpenClaw → local Ollama → gpt-oss:20b
+      → registered validated tools → InvestigationService → MongoDB → React
+```
 
-## Input contract
+OpenClaw receives eight bounded application tools. The model chooses tool calls; there is no fixed four-call script in the normal browser flow. The configured provider is local Ollama with no fallback. The investigation path does not use OpenAI, Qwen, OpenShell, cloud inference, or runtime data downloads. `scripts/cache_real_demo.py` is a separate administrative ingestion utility and may access public sources when explicitly run; investigations read only the cached files.
 
-| Input | Expected format |
+## Evidence contract
+
+| Input | Role |
 | --- | --- |
-| Boundary | GeoJSON Polygon/MultiPolygon or FeatureCollection, EPSG:4326. The first feature is the claimed field; other features are comparison fields. |
-| Weather | CSV with `date,precipitation,normal_precipitation`, ISO dates, and consistent mm/inches units. Without supplied normals, a deficit/excess conclusion remains inconclusive. |
-| Crop layer | Georeferenced USDA CDL GeoTIFF for the relevant year when using real evidence. |
-| Imagery | Comparable georeferenced GeoTIFFs with red and NIR bands, dates, and already-masked cloud/invalid pixels. |
-| Claim | Optional PDF; it is retained with the uploaded asset bundle, but the current investigation does not parse it automatically. |
+| Carrier field geometry | Authoritative insured-field identity, GeoJSON EPSG:4326 |
+| Weather | Cached CSV with precipitation and normal precipitation |
+| Crop layer | Cached georeferenced USDA CDL GeoTIFF |
+| Imagery | Cached comparable red/NIR GeoTIFFs with acquisition dates |
+| Claim statement | Reported crop, cause, date, and narrative to test against evidence |
 
-Findings are **supported**, **contradicted**, **inconclusive**, or **unavailable** and retain measured values and source names. Screening thresholds are hackathon heuristics, not insurance standards: drought rainfall ≤60% of supplied normal, flood rainfall ≥150%, and NDVI decline ≤−0.12. Rainfall does not prove inundation; vegetation decline does not prove a cause.
+Findings are `supported`, `contradicted`, `inconclusive`, or `unavailable` and retain measured values and source provenance. Screening thresholds are hackathon heuristics rather than insurance standards: drought rainfall ≤60% of supplied normal, flood rainfall ≥150%, and NDVI decline ≤−0.12. Rainfall does not prove inundation, and vegetation decline does not prove a cause.
 
-## Runtime and tests
-
-The active API uses `InvestigationService` for all investigation records. `agent_tools.py` exposes bounded tool schemas for a future OpenClaw adapter; autonomous tool selection is not connected to the website yet. See [ASSEMBLY.md](ASSEMBLY.md) for API and asset details and [AGENT_TOOLS.md](AGENT_TOOLS.md) for tool schemas. The optional Qwen review currently uses the OpenShell route described above; the Docker image includes its Python client, but GB10 networking and model availability still need hardware validation.
+## Validation
 
 ```bash
-.venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m unittest discover -s tests -v
-npm --prefix frontend run build
+npm run build --prefix frontend
 ```
 
-The tests cover deterministic GIS behavior, MongoDB-backed investigation workflow with a mock database, the API demo and upload path, Qwen response validation and persistence, and the React production build. Two historical Streamlit tests are skipped because that UI was replaced. Live MongoDB connectivity and the complete demo path were also checked locally; OpenShell inference and ARM64 deployment remain unverified.
+The tests cover registry resolution, hypothesis-independent evidence binding, distinct missing-evidence fields, deterministic GIS calculations, offline evidence access, MongoDB persistence, OpenClaw runtime validation, API behavior, and the React production build. Runtime receipts and browser artifacts are preserved separately; see [RUNTIME.md](RUNTIME.md) and `docs/GB10_RUNTIME_PROOF.json`.

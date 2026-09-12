@@ -31,8 +31,29 @@ function dateLabel(value) {
 }
 
 function statusLabel(status) {
-  return status === 'supported' ? 'Supported' : status === 'contradicted' ? 'Contradicted' :
+  return status === 'observed' ? 'Observed' : status === 'supported' ? 'Supported' : status === 'contradicted' ? 'Contradicted' :
     status === 'inconclusive' ? 'Inconclusive' : 'Unavailable'
+}
+
+function evidenceSemantics(investigation) {
+  const findings = investigation.report?.findings || []
+  const contradicted = findings.filter(item => item.status === 'contradicted').length
+  const unavailable = findings.filter(item => ['unavailable', 'inconclusive'].includes(item.status)).length
+  const displayStatus = finding => contradicted > 0 && finding.status === 'supported' &&
+    ['Vegetation change', 'Other supplied fields'].includes(finding.check) ? 'observed' : finding.status
+  return { findings, contradicted, unavailable, displayStatus,
+    observed: findings.filter(item => displayStatus(item) === 'observed').length }
+}
+
+function presentationCaseStatus(investigation) {
+  const { contradicted, unavailable } = evidenceSemantics(investigation)
+  return contradicted > 0 && unavailable === 0 ? 'Contradicted — human review required' : caseStatus(investigation.status)
+}
+
+function hasLocalEvidence(investigation) {
+  if (typeof investigation.local_evidence_available === 'boolean') return investigation.local_evidence_available
+  const findings = investigation.report?.findings || []
+  return findings.some(item => !['unavailable', 'inconclusive'].includes(item.status)) || (investigation.documents?.length || 0) > 1
 }
 
 function caseStatus(status) {
@@ -77,6 +98,14 @@ function findingSummary(finding) {
   return finding?.detail || 'This evidence was not available.'
 }
 
+function presentationFindingSummary(finding, displayStatus, investigation) {
+  if (displayStatus !== 'observed') return findingSummary(finding)
+  if (finding.check === 'Vegetation change') {
+    return `${findingSummary(finding)} Vegetation stress was observed, but it does not support the reported ${investigation.cause.toLowerCase()} cause.`
+  }
+  return `${findingSummary(finding)} Similar decline was observed in comparison areas, but it does not validate the reported ${investigation.crop} crop or ${investigation.cause.toLowerCase()} cause.`
+}
+
 function sourceName(dataset) {
   if (!dataset) return 'Registered evidence'
   const product = String(dataset.product || 'dataset')
@@ -86,43 +115,67 @@ function sourceName(dataset) {
 }
 
 function presentationBriefing(text, investigation) {
+  const { contradicted, unavailable } = evidenceSemantics(investigation)
+  const reviewStatus = contradicted > 0 && unavailable === 0 ? 'Contradicted — human review required' : 'Needs evidence'
   let result = text.replaceAll('READY_FOR_ADJUSTER_REVIEW', 'Ready for adjuster review')
-    .replaceAll('NEEDS_EVIDENCE', 'Needs evidence')
+    .replaceAll('NEEDS_EVIDENCE', reviewStatus)
     .replaceAll('INVESTIGATING', 'Investigation in progress')
     .replace(/align with (?:a )?drought-related crop loss/gi, 'are consistent with drought-related crop stress')
     .replace(/consistent with a drought-related crop loss/gi, 'consistent with drought-related crop stress')
     .replace(/claim supported/gi, 'reported conditions supported by evidence')
-  if (!investigation.synthetic_demo) {
-    result = result.replace(/^Synthetic demo:\s*(?:No\.?\s*)?/i, 'Evidence review: ')
+    .replace(/^Synthetic demo:\s*(?:No\.?\s*)?(?: {2})?\n?/i, '')
+    .replace(/^Evidence review:\s*,?\s*this is a real case\.?\s*(?: {2})?\n?/gim, '')
+    .replace(/Report saved\s*\(ID[^)]+\)\.?/gi, 'Report saved.')
+    .replace(/(?:A )?follow[‐‑–—-]?up task\s*\(ID[^)]+\)\s*(?:is|was)?\s*(?:created|requested)?/gi, 'Follow-up requested')
+  if (contradicted > 0) {
+    result = result.replace(/supporting damage/gi, 'recording vegetation stress without establishing the reported cause')
+      .replace(/supporting a regional event/gi, 'recording similar stress in comparison areas without validating the reported crop or cause')
+      .replace(/Follow-up requested[\s\S]*$/i, 'Follow-up requested. Contradictory evidence requires human review.')
   }
   const rainfall = investigation.report?.findings?.find(item => item.check === 'Precipitation')?.values
   if (rainfall?.percent_of_normal != null) {
-    result = result.replace(/\d+(?:\.\d+)?% of normal/gi, `${Number(rainfall.percent_of_normal).toFixed(1)}% of normal`)
+    result = result.replace(/≈?\d+(?:\.\d+)?\s*% of normal/gi, `${Number(rainfall.percent_of_normal).toFixed(1)}% of normal`)
   }
   return result
 }
 
 function EvidenceAssessment({ investigation }) {
-  const findings = investigation.report?.findings || []
+  const { findings, contradicted, unavailable, displayStatus, observed } = evidenceSemantics(investigation)
   const supported = findings.filter(item => item.status === 'supported').length
-  const unavailable = findings.filter(item => ['unavailable', 'inconclusive'].includes(item.status)).length
   const completeSupport = findings.length > 0 && supported === findings.length
   const conclusion = findings.length === 0 ? 'Evidence review has not started.' : completeSupport
     ? `Evidence strongly supports ${investigation.cause.toLowerCase()}-related crop stress.`
     : unavailable > 0 ? 'Evidence is insufficient to complete the investigation.'
-      : 'The available evidence does not consistently support the reported conditions.'
+      : 'Available evidence contradicts important parts of the reported conditions.'
   const summary = findings.length === 0 ? 'Start the local investigation to evaluate the available evidence.' : completeSupport
     ? `${supported} of ${findings.length} evidence checks support the reported conditions.`
     : unavailable > 0 ? `${unavailable} of ${findings.length} evidence checks require additional evidence.`
-      : `${supported} of ${findings.length} evidence checks support the reported conditions.`
+      : `${contradicted} findings contradict reported conditions${observed ? `; ${observed} additional stress observations recorded` : ''}.`
   const highlightOrder = ['Precipitation', 'Vegetation change', 'Crop type', 'Other supplied fields']
   const highlights = highlightOrder.map(check => findings.find(item => item.check === check))
-    .filter(item => item?.status === 'supported').map(findingSummary)
+    .filter(item => item?.status === 'supported' && displayStatus(item) !== 'observed').map(findingSummary)
+  const cropFinding = findings.find(item => item.check === 'Crop type')
+  const rainfallFinding = findings.find(item => item.check === 'Precipitation')
+  const discrepancies = []
+  if (investigation.insured_crop && investigation.crop !== investigation.insured_crop) {
+    discrepancies.push(`The loss report identifies ${investigation.crop}, while the fictional carrier record insures ${investigation.insured_crop}.`)
+  }
+  if (cropFinding?.status === 'contradicted' && cropFinding.values?.class) {
+    discrepancies.push(`USDA crop evidence indicates ${cropFinding.values.class}, which does not match the reported ${investigation.crop}.`)
+  }
+  if (rainfallFinding?.status === 'contradicted' && rainfallFinding.values?.percent_of_normal != null) {
+    discrepancies.push(`The report alleges ${investigation.cause.toLowerCase()}, while rainfall was ${Number(rainfallFinding.values.percent_of_normal).toFixed(1)}% of normal.`)
+  }
+  if (observed > 0) {
+    discrepancies.push(`Vegetation stress was observed, but that observation does not support the reported ${investigation.cause.toLowerCase()} cause.`)
+    discrepancies.push(`Similar vegetation decline was observed in comparison areas, but this does not validate the reported crop or ${investigation.cause.toLowerCase()} cause.`)
+  }
   return <section className={`surface evidence-assessment ${completeSupport ? 'assessment-supported' : 'assessment-incomplete'}`} aria-label="Evidence assessment">
     <span className="eyebrow">EVIDENCE ASSESSMENT</span><h2>{conclusion}</h2><p className="assessment-count">{summary}</p>
     {highlights.length > 0 && <p className="assessment-explanation">{highlights.join(' ')}</p>}
+    {discrepancies.length > 0 && <p className="assessment-explanation assessment-discrepancies">{discrepancies.join(' ')}</p>}
     {unavailable > 0 && <p className="assessment-explanation">Additional evidence is required before the evidence review can be completed.</p>}
-    <div className="assessment-handoff"><strong>{caseStatus(investigation.status)}</strong><span>FieldTrace evaluates evidence. A qualified adjuster makes the insurance decision.</span></div>
+    <div className="assessment-handoff"><strong>{presentationCaseStatus(investigation)}</strong><span>FieldTrace evaluates evidence. A qualified adjuster makes the insurance decision.</span></div>
   </section>
 }
 
@@ -169,10 +222,10 @@ function FieldMap({ boundary, selectedField = 0 }) {
       <rect width="520" height="300" fill="#f4f6f4" /><rect width="520" height="300" fill="url(#field-grid)" />
       {rings.map(({ index, ring }, i) => <polygon key={`${index}-${i}`} points={ring.map(point => `${x(point[0])},${y(point[1])}`).join(' ')}
         fill={index === selectedField ? '#8cb99a' : '#d1ddd3'} stroke={index === selectedField ? '#174f32' : '#789080'} strokeWidth="1.8" />)}
-      {labels.map(label => <g key={`label-${label.index}`}><circle cx={label.cx} cy={label.cy} r="3" fill="#173c29" /><text x={label.cx + 7} y={label.cy - 5}>{label.index === selectedField ? 'Analysis area' : `Comparison ${label.index}`}</text></g>)}
+      {labels.map(label => <g key={`label-${label.index}`}><circle cx={label.cx} cy={label.cy} r="3" fill="#173c29" /><text x={label.cx + 7} y={label.cy - 5}>{label.index === selectedField ? 'Insured field' : `Comparison ${label.index}`}</text></g>)}
       <text className="coordinate" x="12" y="20">{north.toFixed(4)}° N</text><text className="coordinate" x="12" y="290">{south.toFixed(4)}° N</text>
     </svg>
-    <span className="map-caption"><span><span className="legend-dot" /> Selected crop analysis area</span><small>{Math.abs(west).toFixed(4)}° W to {Math.abs(east).toFixed(4)}° W · USDA CDL-derived regions, not cadastral parcels</small></span>
+    <span className="map-caption"><span><span className="legend-dot" /> Fictional carrier field boundary</span><small>{Math.abs(west).toFixed(4)}° W to {Math.abs(east).toFixed(4)}° W · public evidence evaluated within and around the insured area</small></span>
   </div>
 }
 
@@ -234,6 +287,7 @@ function UploadModal({ onClose, onCreated }) {
 
 function ClaimModal({ onClose, onCreated, onAdvanced }) {
   const [fields, setFields] = useState([])
+  const [farmId, setFarmId] = useState('')
   const [fieldId, setFieldId] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -247,16 +301,19 @@ function ClaimModal({ onClose, onCreated, onAdvanced }) {
     } catch (err) { setError(err.message) }
     finally { setBusy(false) }
   }
+  const registeredFields = fields.filter(item => !item.synthetic)
+  const farms = registeredFields.filter((item, index, all) => all.findIndex(other => other.farm_id === item.farm_id) === index)
+  const farmFields = registeredFields.filter(item => item.farm_id === farmId)
   const field = fields.find(item => item.id === fieldId)
   return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <div className="upload-modal" role="dialog" aria-modal="true" aria-label="New claim">
       <div className="modal-heading"><div><span className="eyebrow">NEW INVESTIGATION</span><h2>Tell us about the claim</h2><p>Describe the loss. The agent will inspect evidence already available for the selected field.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={20} /></button></div>
       <form onSubmit={submit}><div className="modal-scroll">
-        <label className="claim-input">Farmer or farm name<input name="farm" required maxLength={200} placeholder="Enter the claimant’s name" /></label>
+        <label className="claim-input" htmlFor="claim-farm">Insured farm<select id="claim-farm" required value={farmId} onChange={event => { setFarmId(event.target.value); setFieldId('') }}><option value="" disabled>Select an insured farm</option>{farms.map(item => <option key={item.farm_id} value={item.farm_id}>{item.farm_name}</option>)}</select></label>
+        <input type="hidden" name="farm" value={field?.farm_name || ''} />
+        <label className="claim-input" htmlFor="claim-field">Insured field<select id="claim-field" name="field_id" required value={fieldId} disabled={!farmId} onChange={event => setFieldId(event.target.value)}><option value="" disabled>Select an insured field</option>{farmFields.map(item => <option key={item.id} value={item.id}>{item.name} · {item.insured_crop} · {item.crop_year}</option>)}</select></label>
+        {field && <div className="carrier-record"><span className="eyebrow">FICTIONAL CARRIER FIELD RECORD</span><strong>{field.farm_name} · {field.name}</strong><p>Policy {field.policy_id} · Insured crop: {field.insured_crop} · {field.insured_acres} insured acres</p><small>{field.location}. {field.coverage}</small></div>}
         <label className="claim-input">Claim statement<textarea name="description" required minLength={10} maxLength={2000} rows={4} placeholder="Describe what happened, when the damage was noticed, and what the farmer is claiming." /></label>
-        <label className="claim-input" htmlFor="claim-field">Field<select id="claim-field" name="field_id" required value={fieldId} onChange={event => setFieldId(event.target.value)}><option value="" disabled>Select a field</option>{fields.map(item => <option key={item.id} value={item.id}>{item.name}{item.synthetic ? ' · synthetic fixture' : ' · public evidence'}</option>)}<option value="unregistered">Another field — no local evidence registered</option></select></label>
-        {field && <div className="coverage-note"><strong>Local evidence available · {field.synthetic ? 'synthetic regression fixture' : 'cached public datasets'}</strong><p>{field.location}. {field.coverage}</p><small>Rainfall: {field.weather_start} to {field.weather_end}. Imagery: {field.before_date} and {field.after_date}.</small></div>}
-        {fieldId === 'unregistered' && <><label className="claim-input">Field location<input name="location" required maxLength={200} placeholder="County, state or field reference" /></label><p className="coverage-note">No matching field data is registered. The agent can identify missing evidence and request follow-up; it cannot measure an unregistered field.</p></>}
         <div className="form-grid"><label>Loss date<input key={field?.default_loss_date || fieldId} name="loss_date" type="date" required defaultValue={field?.default_loss_date || ''} /></label><label>Reported cause<select name="cause" defaultValue="Drought"><option>Drought</option><option>Flood</option><option>Other</option></select></label><label>Claimed crop<select name="crop" defaultValue="Corn"><option>Corn</option><option>Soybeans</option><option>Winter wheat</option><option>Other</option></select></label><label>Claim reference (optional)<input name="claim_id" maxLength={100} placeholder="Generated if left blank" /></label></div>
         {error && <p className="error-message">{error}</p>}
         <button type="button" className="text-link intake-advanced" onClick={onAdvanced}>Advanced: import your own evidence files</button>
@@ -392,12 +449,12 @@ export default function App() {
     {page !== 'home' && <main className="app-page">{loading ? <div className="page-state">Loading local cases…</div> : error ? <div className="page-state error"><Database size={30} /><h2>Backend unavailable</h2><p>{error}</p><p>Start MongoDB and FastAPI, then refresh.</p></div> : page === 'dashboard' ? <>
       <div className="page-intro"><div><span className="eyebrow">LOCAL CLAIM WORKSPACE</span><h1>Investigation dashboard</h1><p>Saved cases and evidence packages from the local MongoDB.</p></div><button className="button primary" onClick={() => setClaimOpen(true)}><Plus size={18} /> New claim</button></div>
       <div className="metric-grid"><div><span>Active claims</span><strong>{defaultCases.length}</strong><small>In the working queue</small></div><div><span>Evidence ready</span><strong>{readyCount}</strong><small>For adjuster review</small></div><div><span>Need review</span><strong>{reviewCount}</strong><small>Incomplete or inconclusive</small></div></div>
-      <div className="dashboard-grid"><section className="surface"><div className="surface-heading"><div><span className="eyebrow">CLAIM QUEUE</span><h2>Open a case</h2></div><span className="count-tag">{defaultCases.length} active claims</span></div><label className="check-label history-toggle"><input type="checkbox" checked={showTestHistory} onChange={event => setShowTestHistory(event.target.checked)} /> Show test / regression history ({regressionCases.length})</label><div className="claim-list">{!visibleCases.length && <div className="empty-claims"><h3>Your claims start here</h3><p>Create a claim in your own words. Evidence for the DeWitt analysis area is already on this machine.</p><button className="button primary" onClick={() => setClaimOpen(true)}>New claim</button></div>}{visibleCases.map(item => <button className={`claim-row ${isRegressionCase(item) ? 'regression-row' : ''}`} key={item.id} onClick={() => openCase(item)}><div className="row-main"><span className="claim-id">{item.claim_id || item.id} {item.synthetic_demo && <small>SYNTHETIC</small>}{isRegressionCase(item) && <small>TEST HISTORY</small>}</span><strong>{item.farm}</strong><span>{item.cause} · {item.crop} · {item.location}</span></div><div className="row-end"><span className={`case-status ${item.status === 'READY_FOR_ADJUSTER_REVIEW' ? 'ready' : 'review'}`}>{caseStatus(item.status)}</span><ChevronRight size={19} /></div></button>)}</div></section><aside className="dashboard-side"><section className="surface"><span className="eyebrow">RECENT WORKFLOW</span><h2>{demoCase?.claim_id || 'No claim selected'}</h2><p className="muted">Completed investigation milestones for the newest visible claim.</p><div className="activity-list">{(demoCase?.workflow || []).map((item, index) => <div key={index}><span className="activity-mark"><Check size={13} /></span><span><strong>{workflowLabel(item.stage)}</strong><small>{item.state === 'error' ? 'Needs technical review' : 'Completed'}</small></span></div>)}</div><button className="text-link" onClick={() => demoCase && openCase(demoCase)}>View investigation <ArrowRight size={16} /></button></section><section className="surface sources-card"><span className="eyebrow">LOCAL EVIDENCE SOURCES</span>{['Weather records', 'Crop classification', 'Satellite vegetation', 'Neighbor fields'].map(source => <div key={source}><CheckCircle2 size={17} /> {source}</div>)}<small>Public evidence and synthetic fixtures are labeled in each case.</small></section></aside></div>
+      <div className="dashboard-grid"><section className="surface"><div className="surface-heading"><div><span className="eyebrow">CLAIM QUEUE</span><h2>Open a case</h2></div><span className="count-tag">{defaultCases.length} active claims</span></div><label className="check-label history-toggle"><input type="checkbox" checked={showTestHistory} onChange={event => setShowTestHistory(event.target.checked)} /> Show test / regression history ({regressionCases.length})</label><div className="claim-list">{!visibleCases.length && <div className="empty-claims"><h3>Your claims start here</h3><p>Create a claim in your own words and select a registered insured field.</p><button className="button primary" onClick={() => setClaimOpen(true)}>New claim</button></div>}{visibleCases.map(item => <button className={`claim-row ${isRegressionCase(item) ? 'regression-row' : ''}`} key={item.id} onClick={() => openCase(item)}><div className="row-main"><span className="claim-id">{item.claim_id || item.id} {item.synthetic_demo && <small>SYNTHETIC</small>}{isRegressionCase(item) && <small>TEST HISTORY</small>}</span><strong>{item.farm}</strong><span>{item.cause} · {item.crop} · {item.location}</span></div><div className="row-end"><span className={`case-status ${item.status === 'READY_FOR_ADJUSTER_REVIEW' ? 'ready' : 'review'}`}>{caseStatus(item.status)}</span><ChevronRight size={19} /></div></button>)}</div></section><aside className="dashboard-side"><section className="surface"><span className="eyebrow">RECENT WORKFLOW</span><h2>{demoCase?.claim_id || 'No claim selected'}</h2><p className="muted">Completed investigation milestones for the newest visible claim.</p><div className="activity-list">{(demoCase?.workflow || []).map((item, index) => <div key={index}><span className="activity-mark"><Check size={13} /></span><span><strong>{workflowLabel(item.stage)}</strong><small>{item.state === 'error' ? 'Needs technical review' : 'Completed'}</small></span></div>)}</div><button className="text-link" onClick={() => demoCase && openCase(demoCase)}>View investigation <ArrowRight size={16} /></button></section><section className="surface sources-card"><span className="eyebrow">LOCAL EVIDENCE SOURCES</span>{['Weather records', 'Crop classification', 'Satellite vegetation', 'Neighbor fields'].map(source => <div key={source}><CheckCircle2 size={17} /> {source}</div>)}<small>Public evidence and synthetic fixtures are labeled in each case.</small></section></aside></div>
     </> : selected ? <>
-      <div className="claim-topline"><button className="text-link" onClick={() => navigate('dashboard')}>← Dashboard</button><span>{selected.synthetic_demo ? 'SYNTHETIC DEMONSTRATION SCENARIO' : selected.provenance ? 'FICTIONAL CLAIM SCENARIO · REAL PUBLIC EVIDENCE' : 'LOCAL CASE FILE'}</span></div>
-      <div className="page-intro claim-intro"><div><span className="eyebrow">CLAIM INVESTIGATION · {selected.claim_id || selected.id}</span><h1>{selected.farm}</h1><p>{selected.cause} · {selected.crop} · {selected.location}</p></div><span className={`case-status large ${selected.status === 'READY_FOR_ADJUSTER_REVIEW' ? 'ready' : 'review'}`}>{caseStatus(selected.status)}</span></div>
-      <div className="claim-meta"><div><span>REPORTED LOSS DATE</span><strong>{dateLabel(selected.loss_date)}</strong></div><div><span>FIELD AREA</span><strong>{selected.acreage > 0 ? `${selected.acreage} acres` : 'Not available'}</strong></div><div><span>MEASURED CHECKS</span><strong>{selected.report?.findings?.length || 0}</strong></div><div><span>LOCAL AGENT</span><strong>{investigating ? 'Investigating…' : selected.agent_run ? 'Run saved' : 'Ready to run'}</strong></div></div>
-      <div className="claim-layout"><aside className="claim-context"><section className="surface"><div className="surface-heading"><div><span className="eyebrow">FIELD CONTEXT</span><h2>Crop analysis areas</h2></div><MapPin size={19} /></div><FieldMap boundary={selected.boundary} selectedField={selected.selected_field} /><div className="context-facts"><div><span>Reported cause</span><strong>{selected.cause}</strong></div><div><span>Claimed crop</span><strong>{selected.crop}</strong></div><div><span>Loss date</span><strong>{dateLabel(selected.loss_date)}</strong></div></div></section><section className="surface"><span className="eyebrow">VEGETATION COMPARISON</span><h2>Before and after NDVI</h2><NdviComparison points={selected.ndvi_series} provenance={selected.provenance} /></section></aside>
+      <div className="claim-topline"><button className="text-link" onClick={() => navigate('dashboard')}>← Dashboard</button><span>{selected.synthetic_demo ? 'SYNTHETIC DEMONSTRATION SCENARIO' : selected.field_id && !hasLocalEvidence(selected) ? 'FICTIONAL CARRIER RECORD · LOCAL PUBLIC EVIDENCE UNAVAILABLE' : selected.provenance ? 'FICTIONAL CARRIER RECORD · REAL LOCAL PUBLIC EVIDENCE' : 'LOCAL CASE FILE'}</span></div>
+      <div className="page-intro claim-intro"><div><span className="eyebrow">CLAIM INVESTIGATION · {selected.claim_id || selected.id}</span><h1>{selected.farm}{selected.field_name ? ` · ${selected.field_name}` : ''}</h1><p>{selected.cause} · reported {selected.crop} · {selected.location}</p></div><span className={`case-status large ${selected.status === 'READY_FOR_ADJUSTER_REVIEW' ? 'ready' : 'review'}`}>{presentationCaseStatus(selected)}</span></div>
+      <div className="claim-meta"><div><span>REPORTED LOSS DATE</span><strong>{dateLabel(selected.loss_date)}</strong></div><div><span>INSURED ACRES</span><strong>{selected.insured_acres != null ? selected.insured_acres : 'Not available'}</strong></div><div><span>MEASURED CHECKS</span><strong>{selected.report?.findings?.length || 0}</strong></div><div><span>LOCAL AGENT</span><strong>{investigating ? 'Investigating…' : selected.agent_run ? 'Run saved' : 'Ready to run'}</strong></div></div>
+      <div className="claim-layout"><aside className="claim-context"><section className="surface"><div className="surface-heading"><div><span className="eyebrow">CARRIER FIELD CONTEXT</span><h2>Insured field</h2></div><MapPin size={19} /></div><FieldMap boundary={selected.boundary} selectedField={selected.selected_field} /><div className="context-facts">{selected.policy_id && <div><span>Policy</span><strong>{selected.policy_id}</strong></div>}{selected.insured_crop && <div><span>Carrier insured crop</span><strong>{selected.insured_crop}</strong></div>}<div><span>Reported crop</span><strong>{selected.crop}</strong></div><div><span>Reported cause</span><strong>{selected.cause}</strong></div><div><span>Loss date</span><strong>{dateLabel(selected.loss_date)}</strong></div></div></section><section className="surface"><span className="eyebrow">VEGETATION COMPARISON</span><h2>Before and after NDVI</h2><NdviComparison points={selected.ndvi_series} provenance={selected.provenance} /></section></aside>
         <section className="claim-main"><EvidenceAssessment investigation={selected} /><AgentReport key={selected.id} investigation={selected} />{selected.claim_description && <details className="surface claim-statement-panel"><summary>Claimant statement</summary><p className="claim-statement">{selected.claim_description}</p><small>{selected.report_saved ? 'Original claimant statement.' : 'Reported statement, pending evidence review.'}</small></details>}{selected.tasks?.length > 0 && <section className="surface"><span className="eyebrow">FOLLOW-UP EVIDENCE</span><h2>What is still needed</h2>{selected.tasks.map(task => <div className="followup-item" key={task._id}><strong>{task.title}</strong><p>{task.reason}</p><small>{task.status === 'OPEN' ? 'Awaiting evidence' : 'Resolved'}</small></div>)}</section>}<div className="surface investigation-panel">
           <span className="eyebrow">INVESTIGATION WORKFLOW</span><h2>Evidence progress</h2>
           <p>The local agent chooses crop, rainfall, vegetation, and neighbor checks, then prepares the evidence report for human review. {selected.synthetic_demo ? 'This regression fixture uses synthetic assets.' : 'Measurements come from the registered local evidence package.'}</p>
@@ -409,8 +466,8 @@ export default function App() {
           {<button className="button primary run-button" onClick={runInvestigation} disabled={investigating}><Activity size={18} /> {investigating ? 'Running investigation…' : selected.report_saved ? (selected.origin === 'demo' ? 'Run fresh investigation' : 'Investigate again') : 'Run investigation'}</button>}
           {actionError && <p className="error-message">{actionError}</p>}
         </div>
-          <section className="surface evidence-section"><div className="surface-heading"><div><span className="eyebrow">SOURCE-BACKED FINDINGS</span><h2>Evidence summary</h2></div><span className="count-tag">{selected.report.findings.length} checks</span></div><div className="evidence-grid">{evidenceOrder.map(({ check, label, key, icon: Icon }) => { const finding = selected.report.findings.find(item => item.check === check); if (!finding) return null; return <div className="evidence-card" key={key}><div className="evidence-card-top"><span className="evidence-icon"><Icon size={20} /></span><span className={`finding-status ${finding.status}`}>{statusLabel(finding.status)}</span></div><h3>{label}</h3><p>{findingSummary(finding)}</p><SourceDetails finding={finding} /></div> })}</div></section>
-          <section className="surface assessment"><span className="eyebrow">FORENSIC EVIDENCE SUMMARY</span><h2>{selected.report.evidence_summary.supported} of {selected.report.findings.length} checks supported</h2><p>{selected.report.assessment}</p><div className="assessment-note"><ShieldCheck size={18} /> FieldTrace does not approve or deny claims. A qualified adjuster reviews this evidence.</div><div className="report-actions"><button className="button secondary" onClick={() => setReportOpen(!reportOpen)}><FileText size={17} /> {reportOpen ? 'Hide report' : 'View report'}</button>{selected.report_saved && <a className="button secondary" href={`/api/cases/${encodeURIComponent(selected.id)}/report.md`} download={`${selected.id}-evidence.md`}><Download size={17} /> Download Markdown</a>}</div>{reportOpen && <div className="report-details"><h3>Measured findings</h3>{selected.report.findings.map(finding => <div key={finding.check}><strong>{finding.check} · {statusLabel(finding.status)}</strong><p>{finding.detail}</p><small>{finding.source}</small></div>)}<h3>Agent response</h3><p>{selected.agent_run?.summary || 'No completed agent run saved yet.'}</p><h3>Method</h3><p>{selected.report.method}</p><details className="technical-audit"><summary>Technical audit</summary><pre>{JSON.stringify(selected.actions, null, 2)}</pre></details></div>}</section>
+          <section className="surface evidence-section"><div className="surface-heading"><div><span className="eyebrow">SOURCE-BACKED FINDINGS</span><h2>Evidence summary</h2></div><span className="count-tag">{selected.report.findings.length} checks</span></div><div className="evidence-grid">{evidenceOrder.map(({ check, label, key, icon: Icon }) => { const finding = selected.report.findings.find(item => item.check === check); if (!finding) return null; const displayStatus = evidenceSemantics(selected).displayStatus(finding); return <div className="evidence-card" key={key}><div className="evidence-card-top"><span className="evidence-icon"><Icon size={20} /></span><span className={`finding-status ${displayStatus}`}>{statusLabel(displayStatus)}</span></div><h3>{label}</h3><p>{presentationFindingSummary(finding, displayStatus, selected)}</p><SourceDetails finding={finding} /></div> })}</div></section>
+          <section className="surface assessment"><span className="eyebrow">FORENSIC EVIDENCE SUMMARY</span><h2>{evidenceSemantics(selected).contradicted > 0 ? `${evidenceSemantics(selected).contradicted} findings contradict reported conditions` : evidenceSemantics(selected).unavailable > 0 ? `${evidenceSemantics(selected).unavailable} checks require additional evidence` : `${selected.report.evidence_summary.supported} of ${selected.report.findings.length} checks supported`}</h2><p>{selected.report.assessment}</p><div className="assessment-note"><ShieldCheck size={18} /> FieldTrace does not approve or deny claims. A qualified adjuster reviews this evidence.</div><div className="report-actions"><button className="button secondary" onClick={() => setReportOpen(!reportOpen)}><FileText size={17} /> {reportOpen ? 'Hide report' : 'View report'}</button>{selected.report_saved && <a className="button secondary" href={`/api/cases/${encodeURIComponent(selected.id)}/report.md`} download={`${selected.id}-evidence.md`}><Download size={17} /> Download Markdown</a>}</div>{reportOpen && <div className="report-details"><h3>Measured findings</h3>{selected.report.findings.map(finding => { const displayStatus = evidenceSemantics(selected).displayStatus(finding); return <div key={finding.check}><strong>{finding.check} · {statusLabel(displayStatus)}</strong><p>{presentationFindingSummary(finding, displayStatus, selected)}</p><small>{finding.source}</small></div>})}<h3>Agent response</h3><BriefingText text={presentationBriefing(selected.agent_run?.summary || 'No completed agent run saved yet.', selected)} /><h3>Method</h3><p>{selected.report.method}</p><details className="technical-audit"><summary>Technical audit</summary><pre>{JSON.stringify(selected.actions, null, 2)}</pre></details></div>}</section>
         </section></div>
     </> : <div className="page-state">No claim selected. Create a new claim from the dashboard to begin.</div>}</main>}
     <footer className="site-footer"><span>FieldTrace · Crop insurance evidence assistant</span><span>Local data · Human review · OpenClaw · Ollama · gpt-oss:20b</span></footer>

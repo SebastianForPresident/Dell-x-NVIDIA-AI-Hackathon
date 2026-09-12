@@ -1,8 +1,9 @@
 """Cache and prepare traceable public evidence for the primary local demo.
 
 Network access is required only while running this script. Runtime analysis uses
-the resulting local files. The study areas are derived from USDA CDL corn
-pixels; they are not cadastral parcels or asserted ownership boundaries.
+the resulting local files. The insured-field geometry comes from the fictional
+carrier registry; comparison areas are derived from USDA CDL corn pixels and
+are not cadastral parcels or asserted ownership boundaries.
 """
 from __future__ import annotations
 
@@ -44,6 +45,10 @@ SCENES = {
 AOI = {"type": "Polygon", "coordinates": [[[-88.92, 40.13], [-88.86, 40.13],
         [-88.86, 40.18], [-88.92, 40.18], [-88.92, 40.13]]]}
 LOSS_DATE = date(2025, 9, 18)
+DEMO_INSURED_GEOMETRY = {"type": "Polygon", "coordinates": [[
+    [-88.9045, 40.1480], [-88.8980, 40.1484], [-88.8976, 40.1524],
+    [-88.9040, 40.1520], [-88.9045, 40.1480],
+]]}
 
 
 def download(url: str, path: Path, insecure=False):
@@ -90,24 +95,27 @@ def prepare_cdl():
         candidates.sort(reverse=True, key=lambda item: item[0])
         if len(candidates) < 2:
             raise RuntimeError("AOI does not contain two usable USDA-derived corn areas")
-        features = []
-        for index, (pixels, geometry) in enumerate(candidates[:3]):
+        features = [{"type": "Feature", "properties": {
+            "name": "North 40", "role": "insured",
+            "source": "Fictional carrier field registry",
+            "note": "Demo insured-field boundary; not a real policyholder boundary.",
+        }, "geometry": DEMO_INSURED_GEOMETRY}]
+        for index, (pixels, geometry) in enumerate(candidates[1:3], start=1):
             features.append({"type": "Feature", "properties": {
-                "name": "Selected crop analysis area" if index == 0 else f"Comparison crop area {index}",
-                "role": "analysis" if index == 0 else "comparison",
+                "name": f"Comparison area {index}", "role": "comparison",
                 "derived_from": "USDA NASS Cropland Data Layer 2025; contiguous CDL class 1 pixels",
                 "cdl_pixels": pixels,
             }, "geometry": geometry})
-        (CACHE / "analysis_areas.geojson").write_text(json.dumps({
+        (CACHE / "field_context.geojson").write_text(json.dumps({
             "type": "FeatureCollection", "features": features,
-            "provenance": {"provider": "USDA NASS", "product": "Cropland Data Layer",
-                "year": 2025, "source_url": CDL_URL,
-                "note": "Analysis areas derived from classified corn pixels; not cadastral parcels."}}, indent=2))
+            "provenance": {"insured_geometry": "Fictional carrier registry",
+                "comparison_geometry": "USDA NASS Cropland Data Layer 2025",
+                "note": "The insured boundary is fictional; public evidence measurements are real."}}, indent=2))
 
 
 def prepare_sentinel(key: str):
     scene = SCENES[key]
-    geometry = json.loads((CACHE / "analysis_areas.geojson").read_text())
+    geometry = json.loads((CACHE / "field_context.geojson").read_text())
     extent = {"type": "FeatureCollection", "features": geometry["features"]}
     arrays = []
     out_profile = None
@@ -165,13 +173,17 @@ def main():
     for key in SCENES:
         prepare_sentinel(key)
     ghcn = prepare_weather()
-    assets = [CACHE / name for name in ("analysis_areas.geojson", "usda_cdl_2025.tif",
+    assets = [CACHE / name for name in ("field_context.geojson", "usda_cdl_2025.tif",
         "sentinel2_before.tif", "sentinel2_after.tif", "noaa_ghcn_daily.csv")]
     manifest = {
         "package_id": "dewitt-public-2025-v1", "claim_scenario": "fictional",
-        "analysis_area": "CDL-derived crop analysis area; not a parcel boundary",
+        "analysis_area": "Fictional carrier insured-field boundary with CDL-derived comparison areas",
         "loss_date": LOSS_DATE.isoformat(),
         "datasets": {
+            "boundary": {"provider": "Fictional carrier registry", "product": "Demo insured-field boundary",
+                         "field_id": "FIELD-17", "field_name": "North 40",
+                         "note": "Fictional hackathon carrier record; not a real policyholder boundary.",
+                         "local_file": "field_context.geojson"},
             "crop": {"provider": "USDA NASS", "product": "Cropland Data Layer", "year": 2025,
                      "url": CDL_URL, "local_file": "usda_cdl_2025.tif"},
             "weather": {"provider": "NOAA NCEI", "product": "GHCN-Daily",
@@ -185,7 +197,7 @@ def main():
                       "item_id": SCENES["after"]["id"], "date": SCENES["after"]["date"],
                       "catalog": STAC_URL, "local_file": "sentinel2_after.tif"},
         },
-        "processing": {"crop": "Dominant CDL class inside USDA-derived analysis geometry",
+        "processing": {"crop": "Dominant CDL class inside the carrier-registry insured geometry",
                        "weather": "30-day total and sum of 1991–2020 calendar-day means",
                        "vegetation": "Mean NDVI=(B08-B04)/(B08+B04) over valid pixels"},
         "files": {path.name: {"sha256": sha256(path), "bytes": path.stat().st_size} for path in assets},
