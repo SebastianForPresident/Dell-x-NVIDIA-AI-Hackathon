@@ -1,12 +1,7 @@
 # Fieldnote — Crop Insurance Forensics
 
 A local evidence assistant for crop insurance adjusters. A React dashboard presents case files, field geometry, rainfall and vegetation charts, source-backed findings, and a downloadable report. FastAPI performs deterministic geospatial checks; local MongoDB stores case metadata and evidence. Qwen, routed through NVIDIA OpenShell, can draft claim-field suggestions and report wording. The system never approves or denies a claim.
-**MongoDB persistence milestone:** see [PERSISTENCE.md](PERSISTENCE.md) for setup,
-data model, save/reopen workflow, and future OpenClaw integration seams. The
-OpenShell/Qwen deployment section below is legacy; the chosen target runtime is
-OpenClaw + Ollama + `gpt-oss:20b`, whose integration is still pending.
-
-A local evidence assistant for crop-insurance adjusters. It reads a claim's field boundary, weather history, crop layer, and before/after imagery, then produces an auditable evidence package. It never approves or denies a claim.
+The merged repository also contains an optional [investigation history module](PERSISTENCE.md) for follow-up tasks and audit records. The React app currently uses its own `server/database.py` case collection; that module is not connected to the website.
 
 Every built-in case is **synthetic** and labeled as such. The demo weather, crop, imagery, farm names, and field polygons are fabricated; they are not NOAA, USDA, or satellite observations.
 
@@ -87,8 +82,9 @@ Open the printed URL and use **System status → Test model route** before the Q
 ## Checks
 
 ```bash
+.venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m unittest discover -s tests -v
 cd frontend && npm run build
 ```
 
-Tests cover weather coverage and cause-specific thresholds, CSV unit conversion, raster field sampling, CDL classification, image-date handling, synthetic seed integrity, and the fixed OpenShell inference endpoint. The React production bundle is built locally.
+Tests cover weather coverage and cause-specific thresholds, CSV unit conversion, raster field sampling, CDL classification, image-date handling, synthetic seed integrity, investigation history, and the fixed OpenShell inference endpoint. The React production bundle is built locally.

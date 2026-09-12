@@ -5,4 +5,3 @@ python-multipart>=0.0.20,<1
 numpy>=1.26,<3
 rasterio>=1.4,<2
 pypdf>=5,<7
-pymongo>=4.10,<5
