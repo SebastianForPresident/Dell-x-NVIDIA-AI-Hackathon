@@ -44,6 +44,14 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(result['investigation_id'], 'b' * 64)
             self.assertEqual(service.record_action.call_args.kwargs['actor'], 'agent')
 
+    def test_framework_error_is_not_saved_as_model_briefing(self):
+        output = {'meta': {'finalAssistantVisibleText': 'NO_REPLY'},
+                  'payloads': [{'text': 'Set Case Status failed', 'isError': True}]}
+        self.assertEqual(runtime.visible_briefing(output), '')
+        output['meta']['finalAssistantVisibleText'] = 'Missing evidence requires follow-up.'
+        output['payloads'].append({'text': 'Missing evidence requires follow-up.'})
+        self.assertEqual(runtime.visible_briefing(output), 'Missing evidence requires follow-up.')
+
     def test_case_identifier_cannot_be_a_path(self):
         with self.assertRaisesRegex(ValueError, 'Invalid investigation ID'):
             runtime.run('../../outside')

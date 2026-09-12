@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Activity, ArrowRight, Check, CheckCircle2, ChevronRight, CloudRain,
   Database, Download, FileText, Leaf, MapPin, Menu, Plus, ShieldCheck,
@@ -115,6 +115,96 @@ function UploadModal({ onClose, onCreated }) {
   </div>
 }
 
+function ClaimModal({ onClose, onCreated, onAdvanced }) {
+  const [fields, setFields] = useState([])
+  const [fieldId, setFieldId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { api('/api/local-fields').then(setFields).catch(err => setError(err.message)) }, [])
+  async function submit(event) {
+    event.preventDefault()
+    setBusy(true); setError('')
+    const body = Object.fromEntries(new FormData(event.currentTarget))
+    try {
+      onCreated(await api('/api/claims', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }))
+    } catch (err) { setError(err.message) }
+    finally { setBusy(false) }
+  }
+  const field = fields.find(item => item.id === fieldId)
+  return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+    <div className="upload-modal" role="dialog" aria-modal="true" aria-label="New claim">
+      <div className="modal-heading"><div><span className="eyebrow">NEW INVESTIGATION</span><h2>Tell us about the claim</h2><p>Describe the loss. The agent will inspect evidence already available for the selected field.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={20} /></button></div>
+      <form onSubmit={submit}><div className="modal-scroll">
+        <label className="claim-input">Farmer or farm name<input name="farm" required maxLength={200} placeholder="Enter the claimant’s name" /></label>
+        <label className="claim-input">Claim statement<textarea name="description" required minLength={10} maxLength={2000} rows={4} placeholder="Describe what happened, when the damage was noticed, and what the farmer is claiming." /></label>
+        <label className="claim-input" htmlFor="claim-field">Field<select id="claim-field" name="field_id" required value={fieldId} onChange={event => setFieldId(event.target.value)}><option value="" disabled>Select a field</option>{fields.map(item => <option key={item.id} value={item.id}>{item.name} · synthetic demo</option>)}<option value="unregistered">Another field — no local evidence registered</option></select></label>
+        {field && <div className="coverage-note"><strong>Local evidence available · synthetic</strong><p>{field.location}. {field.coverage}</p><small>Rainfall: {field.weather_start} to {field.weather_end}. Imagery: {field.before_date} and {field.after_date}. Use a loss date within this coverage to demonstrate the full investigation.</small></div>}
+        {fieldId === 'unregistered' && <><label className="claim-input">Field location<input name="location" required maxLength={200} placeholder="County, state or field reference" /></label><p className="coverage-note">No matching field data is registered. The agent can identify missing evidence and request follow-up; it cannot measure an unregistered field.</p></>}
+        <div className="form-grid"><label>Loss date<input name="loss_date" type="date" required /></label><label>Reported cause<select name="cause" defaultValue="Drought"><option>Drought</option><option>Flood</option><option>Other</option></select></label><label>Claimed crop<select name="crop" defaultValue="Corn"><option>Corn</option><option>Soybeans</option><option>Winter wheat</option><option>Other</option></select></label><label>Claim reference (optional)<input name="claim_id" maxLength={100} placeholder="Generated if left blank" /></label></div>
+        {error && <p className="error-message">{error}</p>}
+        <button type="button" className="text-link intake-advanced" onClick={onAdvanced}>Advanced: import your own evidence files</button>
+      </div><div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button className="button primary" disabled={busy}>{busy ? 'Creating claim…' : 'Create claim'} <ArrowRight size={17} /></button></div></form>
+    </div>
+  </div>
+}
+
+function useReceivedText(text, streaming) {
+  const [displayed, setDisplayed] = useState(text)
+  const target = useRef(text)
+  const current = useRef(text)
+  const active = useRef(streaming)
+  useEffect(() => { target.current = text; active.current = streaming }, [text, streaming])
+  useEffect(() => {
+    let frame
+    let last = 0
+    function render(now) {
+      if (now - last >= 16 && current.current !== target.current) {
+        const next = target.current
+        // Only reveal text already received. Revisions and saved reports apply immediately.
+        current.current = !active.current || !next.startsWith(current.current)
+          ? next : next.slice(0, current.current.length + Math.max(2, Math.ceil((next.length - current.current.length) / 5)))
+        setDisplayed(current.current)
+        last = now
+      }
+      frame = requestAnimationFrame(render)
+    }
+    frame = requestAnimationFrame(render)
+    return () => cancelAnimationFrame(frame)
+  }, [])
+  return displayed
+}
+
+function BriefingText({ text }) {
+  const bold = value => value.split(/(\*\*[^*]+\*\*)/g).map((part, i) => part.startsWith('**') && part.endsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong> : part.replace(/\*\*/g, '').replace(/\*+$/, ''))
+  return text.split(/\n\s*\n/).filter(Boolean).map((paragraph, i) => {
+    const clean = paragraph.replace(/^#{1,4}\s+/gm, '')
+    return <p key={i}>{bold(clean)}</p>
+  })
+}
+
+function AgentReport({ investigation }) {
+  const [live, setLive] = useState(null)
+  useEffect(() => {
+    setLive(null)
+    const source = new EventSource(`/api/cases/${encodeURIComponent(investigation.id)}/agent-stream`)
+    source.onmessage = event => setLive(JSON.parse(event.data))
+    return () => source.close()
+  }, [investigation.id])
+  const running = live?.state === 'running'
+  const completed = live?.state === 'complete' || !!investigation.agent_run
+  const text = live?.text || (!running && investigation.agent_run?.summary) || ''
+  const displayedText = useReceivedText(text, running)
+
+  return <section className="surface agent-report" aria-label="GPT-OSS live report">
+    <div className="surface-heading"><div><span className="eyebrow">GPT-OSS · LOCAL ON GB10</span><h2>Investigation briefing</h2></div><span className={`count-tag ${running ? 'streaming' : ''}`}>{running ? (text ? 'Writing briefing' : 'Inspecting evidence') : live?.state === 'failed' ? 'Run interrupted' : text ? 'Saved briefing' : completed ? 'No briefing returned' : 'Awaiting investigation'}</span></div>
+    <p className="muted">Live model output and measured tool results. {investigation.synthetic_demo ? 'This case uses synthetic evidence.' : 'Human adjuster review required.'}</p>
+    <div className="agent-report-text" aria-live="polite">{displayedText ? <BriefingText text={displayedText} /> : (running ? 'The local model is reviewing the claim and selecting evidence checks…' : completed ? 'The investigation completed without a model briefing. Review the measured findings and follow-up tasks below.' : 'Start the investigation below to receive a briefing from the local model.')}</div>
+    {running && <div className="live-progress"><Activity size={15} /><span>{live.tools?.find(tool => tool.state === 'running')?.name.replaceAll('_', ' ') || `${live.tools?.filter(tool => tool.state === 'complete').length || 0} evidence actions completed`}</span></div>}
+    {!!live?.tools?.length && <details className="agent-live-tools"><summary>Evidence inspected · {live.tools.filter(tool => tool.state === 'complete').length} completed actions</summary>{live.tools.map(tool => <div key={tool.id}><strong>{tool.name.replaceAll('_', ' ')}</strong><span>{tool.state === 'running' ? 'Measuring…' : tool.finding?.detail || (tool.state === 'failed' ? 'Could not complete this check' : 'Saved')}</span>{tool.finding && <small>Source: {tool.finding.source}</small>}</div>)}</details>}
+    <div className="assessment-note"><ShieldCheck size={18} /> Evidence briefing only. The human adjuster makes the decision.</div>
+  </section>
+}
+
 export default function App() {
   const [page, setPage] = useState('home')
   const [cases, setCases] = useState([])
@@ -122,19 +212,15 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [claimOpen, setClaimOpen] = useState(false)
+  const [showExamples, setShowExamples] = useState(false)
   const [investigating, setInvestigating] = useState(false)
   const [actionError, setActionError] = useState('')
   const [reportOpen, setReportOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
 
   useEffect(() => {
-    api('/api/health')
-      .then(() => api('/api/demo', { method: 'POST' }))
-      .then(demo => api('/api/cases').then(rows => ({ demo, rows })))
-      .then(({ demo, rows }) => {
-        setCases(rows)
-        setSelectedId(demo.id)
-      })
+    api('/api/cases').then(setCases)
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
   }, [])
@@ -146,21 +232,30 @@ export default function App() {
     return () => { live = false; clearInterval(timer) }
   }, [])
 
-  const selected = cases.find(item => item.id === selectedId) || cases[0]
-  const readyCount = cases.filter(item => item.status === 'READY_FOR_ADJUSTER_REVIEW').length
-  const reviewCount = cases.filter(item => item.status === 'NEEDS_EVIDENCE').length
-  const demoCase = cases.find(item => item.origin === 'demo') || cases.find(item => item.synthetic_demo) || cases[0]
+  const visibleCases = cases.filter(item => showExamples || item.origin !== 'demo')
+  const selected = cases.find(item => item.id === selectedId) || visibleCases[0]
+  const readyCount = visibleCases.filter(item => item.status === 'READY_FOR_ADJUSTER_REVIEW').length
+  const reviewCount = visibleCases.filter(item => item.status === 'NEEDS_EVIDENCE').length
+  const demoCase = visibleCases[0]
 
   function navigate(next) { setPage(next); setMenuOpen(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }
   function openCase(item) { setSelectedId(item.id); setReportOpen(false); navigate('claim') }
-  function onCreated(item) { setCases(current => [item, ...current]); setSelectedId(item.id); setUploadOpen(false); navigate('claim') }
+  function onCreated(item) { setCases(current => [item, ...current]); setSelectedId(item.id); setUploadOpen(false); setClaimOpen(false); navigate('claim') }
+
+  async function loadExample() {
+    try {
+      const item = await api('/api/demo/reset', { method: 'POST' })
+      setShowExamples(true)
+      onCreated(item)
+    } catch (err) { setActionError(err.message) }
+  }
 
   async function runInvestigation() {
-    if (!selected || selected.origin !== 'demo') return
+    if (!selected) return
     let caseId = selected.id
     setInvestigating(true); setActionError('')
     try {
-      if (selected.report_saved) {
+      if (selected.report_saved && selected.origin === 'demo') {
         const fresh = await api('/api/demo/reset', { method: 'POST' })
         caseId = fresh.id
         setCases(current => [fresh, ...current])
@@ -176,18 +271,18 @@ export default function App() {
   return <div className="site-shell">
     <header className="site-header"><button className="brand" onClick={() => navigate('home')}><span className="brand-icon"><Leaf size={22} /></span><span>FieldTrace<small>LOCAL CROP FORENSICS</small></span></button><nav className={menuOpen ? 'open' : ''} aria-label="Main navigation">{[['home', 'Home'], ['dashboard', 'Dashboard'], ['claim', 'Claim investigation']].map(([key, label]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => navigate(key)}>{label}</button>)}</nav><div className="header-right"><span className="local-badge"><span /> LOCAL SYSTEM</span><button className="menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle navigation"><Menu size={22} /></button></div></header>
 
-    {page === 'home' && <main className="home-page"><section className="home-hero"><div className="home-copy"><span className="eyebrow">DELL × NVIDIA AI HACKATHON</span><h1>Crop-loss evidence,<br /><em>ready for review.</em></h1><p>FieldTrace is a local AI evidence assistant for crop insurance adjusters. It brings weather, crop, vegetation, and neighboring-field signals into one reviewable investigation.</p><div className="hero-actions"><button className="button primary" onClick={() => navigate('dashboard')}>View dashboard <ArrowRight size={18} /></button><button className="button secondary" onClick={() => demoCase && openCase(demoCase)} disabled={!demoCase}>Open demo claim <ChevronRight size={18} /></button></div><div className="hero-note"><ShieldCheck size={19} /><span>Evidence for a human adjuster. No automated claim decisions.</span></div></div><div className="hero-visual"><div className="hero-card-top"><span>DEMO INVESTIGATION</span><span className="signal"><span /> LOCAL DATA</span></div><div className="hero-claim"><span>{demoCase?.claim_id || 'DEMO CASE'}</span><strong>{demoCase?.cause || 'Drought'} · {demoCase?.crop || 'Corn'}</strong><small>{demoCase?.location || 'Synthetic case'}</small></div><div className="hero-flow">{['Claim context', 'Weather & crop', 'Vegetation & neighbors', 'Adjuster report'].map((step, index) => <div key={step}><span>{String(index + 1).padStart(2, '0')}</span><strong>{step}</strong><CheckCircle2 size={18} /></div>)}</div><div className="hero-card-bottom"><Sparkles size={17} /> Local autonomous investigation · gpt-oss:20b</div></div></section><section className="home-section"><div className="section-title"><span className="eyebrow">ONE CLEAR WORKFLOW</span><h2>From claim to evidence package</h2></div><div className="how-grid">{[['01', 'Select a claim', 'Open a saved case or import a field boundary and local evidence files.'], ['02', 'Review measured evidence', 'See rainfall, crop classification, NDVI, and nearby-field checks with sources.'], ['03', 'Run the local agent', 'Let the agent choose evidence checks and prepare a report for the adjuster.']].map(([number, title, copy]) => <div className="how-card" key={title}><span>{number}</span><h3>{title}</h3><p>{copy}</p></div>)}</div></section><section className="value-strip"><div><strong>Faster investigations</strong><span>One place for the evidence package.</span></div><div><strong>Private by design</strong><span>Claims and data stay on the local system.</span></div><div><strong>Human decision making</strong><span>Adjusters decide; FieldTrace prepares evidence.</span></div></section></main>}
+    {page === 'home' && <main className="home-page"><section className="home-hero"><div className="home-copy"><span className="eyebrow">DELL × NVIDIA AI HACKATHON</span><h1>Crop-loss evidence,<br /><em>ready for review.</em></h1><p>FieldTrace is a local AI evidence assistant for crop insurance adjusters. It brings weather, crop, vegetation, and neighboring-field signals into one reviewable investigation.</p><div className="hero-actions"><button className="button primary" onClick={() => setClaimOpen(true)}>New claim <ArrowRight size={18} /></button><button className="button secondary" onClick={loadExample}>Try a synthetic example <ChevronRight size={18} /></button></div><div className="hero-note"><ShieldCheck size={19} /><span>Evidence for a human adjuster. No automated claim decisions.</span></div></div><div className="hero-visual"><div className="hero-card-top"><span>LOCAL EVIDENCE LIBRARY</span><span className="signal"><span /> LOCAL DATA</span></div><div className="hero-claim"><span>DEWITT DEMONSTRATION FIELD</span><strong>One field · synthetic evidence</strong><small>DeWitt County, Illinois</small></div><div className="hero-flow">{['Claim context', 'Weather & crop', 'Vegetation & neighbors', 'Adjuster report'].map((step, index) => <div key={step}><span>{String(index + 1).padStart(2, '0')}</span><strong>{step}</strong><CheckCircle2 size={18} /></div>)}</div><div className="hero-card-bottom"><Sparkles size={17} /> Local autonomous investigation · gpt-oss:20b</div></div></section><section className="home-section"><div className="section-title"><span className="eyebrow">ONE CLEAR WORKFLOW</span><h2>From claim to evidence package</h2></div><div className="how-grid">{[['01', 'Select a claim', 'Write a claim and select a field with locally available evidence.'], ['02', 'Review measured evidence', 'See rainfall, crop classification, NDVI, and nearby-field checks with sources.'], ['03', 'Run the local agent', 'Let the agent choose evidence checks and prepare a report for the adjuster.']].map(([number, title, copy]) => <div className="how-card" key={title}><span>{number}</span><h3>{title}</h3><p>{copy}</p></div>)}</div></section><section className="value-strip"><div><strong>Faster investigations</strong><span>One place for the evidence package.</span></div><div><strong>Private by design</strong><span>Claims and data stay on the local system.</span></div><div><strong>Human decision making</strong><span>Adjusters decide; FieldTrace prepares evidence.</span></div></section></main>}
 
     {page !== 'home' && <main className="app-page">{loading ? <div className="page-state">Loading local cases…</div> : error ? <div className="page-state error"><Database size={30} /><h2>Backend unavailable</h2><p>{error}</p><p>Start MongoDB and FastAPI, then refresh.</p></div> : page === 'dashboard' ? <>
-      <div className="page-intro"><div><span className="eyebrow">LOCAL CLAIM WORKSPACE</span><h1>Investigation dashboard</h1><p>Saved cases and evidence packages from the local MongoDB.</p></div><button className="button primary" onClick={() => setUploadOpen(true)}><Plus size={18} /> Import case</button></div>
-      <div className="metric-grid"><div><span>Local cases</span><strong>{cases.length}</strong><small>Stored in this workspace</small></div><div><span>Evidence ready</span><strong>{readyCount}</strong><small>For adjuster review</small></div><div><span>Need review</span><strong>{reviewCount}</strong><small>Incomplete or inconclusive</small></div></div>
-      <div className="dashboard-grid"><section className="surface"><div className="surface-heading"><div><span className="eyebrow">CLAIM QUEUE</span><h2>Open a case</h2></div><span className="count-tag">{cases.length} cases</span></div><div className="claim-list">{[...cases].sort((a, b) => (a.id === demoCase?.id ? -1 : b.id === demoCase?.id ? 1 : 0)).map(item => <button className="claim-row" key={item.id} onClick={() => openCase(item)}><div className="row-main"><span className="claim-id">{item.claim_id || item.id} {item.synthetic_demo && <small>SYNTHETIC</small>}</span><strong>{item.farm}</strong><span>{item.cause} · {item.crop} · {item.location}</span></div><div className="row-end"><span className={`case-status ${item.status === 'READY_FOR_ADJUSTER_REVIEW' ? 'ready' : 'review'}`}>{caseStatus(item.status)}</span><ChevronRight size={19} /></div></button>)}</div></section><aside className="dashboard-side"><section className="surface"><span className="eyebrow">SAVED WORKFLOW</span><h2>{demoCase?.claim_id || 'Demo claim'}</h2><p className="muted">These stages come from saved backend actions. Run the demo claim to create them.</p><div className="activity-list">{(demoCase?.workflow || []).map((item, index) => <div key={index}><span className="activity-mark"><Check size={13} /></span><span><strong>{item.stage}</strong><small>{item.detail}</small></span></div>)}</div><button className="text-link" onClick={() => demoCase && openCase(demoCase)}>View investigation <ArrowRight size={16} /></button></section><section className="surface sources-card"><span className="eyebrow">LOCAL EVIDENCE SOURCES</span>{['Weather records', 'Crop classification', 'Satellite vegetation', 'Neighbor fields'].map(source => <div key={source}><CheckCircle2 size={17} /> {source}</div>)}<small>Demo data is synthetic and clearly labeled.</small></section></aside></div>
+      <div className="page-intro"><div><span className="eyebrow">LOCAL CLAIM WORKSPACE</span><h1>Investigation dashboard</h1><p>Saved cases and evidence packages from the local MongoDB.</p></div><button className="button primary" onClick={() => setClaimOpen(true)}><Plus size={18} /> New claim</button></div>
+      <div className="metric-grid"><div><span>Local cases</span><strong>{visibleCases.length}</strong><small>Stored in this workspace</small></div><div><span>Evidence ready</span><strong>{readyCount}</strong><small>For adjuster review</small></div><div><span>Need review</span><strong>{reviewCount}</strong><small>Incomplete or inconclusive</small></div></div>
+      <div className="dashboard-grid"><section className="surface"><div className="surface-heading"><div><span className="eyebrow">CLAIM QUEUE</span><h2>Open a case</h2></div><span className="count-tag">{visibleCases.length} claims</span></div><label className="check-label"><input type="checkbox" checked={showExamples} onChange={event => setShowExamples(event.target.checked)} /> Show synthetic example history ({cases.filter(item => item.origin === 'demo').length})</label><div className="claim-list">{!visibleCases.length && <div className="empty-claims"><h3>Your claims start here</h3><p>Create a claim in your own words. Evidence for the DeWitt demonstration field is already on this machine.</p><button className="button primary" onClick={() => setClaimOpen(true)}>New claim</button></div>}{visibleCases.map(item => <button className="claim-row" key={item.id} onClick={() => openCase(item)}><div className="row-main"><span className="claim-id">{item.claim_id || item.id} {item.synthetic_demo && <small>SYNTHETIC</small>}</span><strong>{item.farm}</strong><span>{item.cause} · {item.crop} · {item.location}</span></div><div className="row-end"><span className={`case-status ${item.status === 'READY_FOR_ADJUSTER_REVIEW' ? 'ready' : 'review'}`}>{caseStatus(item.status)}</span><ChevronRight size={19} /></div></button>)}</div></section><aside className="dashboard-side"><section className="surface"><span className="eyebrow">SAVED WORKFLOW</span><h2>{demoCase?.claim_id || 'No claim selected'}</h2><p className="muted">The agent’s completed actions appear here after you start an investigation.</p><div className="activity-list">{(demoCase?.workflow || []).map((item, index) => <div key={index}><span className="activity-mark"><Check size={13} /></span><span><strong>{item.stage}</strong><small>{item.detail}</small></span></div>)}</div><button className="text-link" onClick={() => demoCase && openCase(demoCase)}>View investigation <ArrowRight size={16} /></button></section><section className="surface sources-card"><span className="eyebrow">LOCAL EVIDENCE SOURCES</span>{['Weather records', 'Crop classification', 'Satellite vegetation', 'Neighbor fields'].map(source => <div key={source}><CheckCircle2 size={17} /> {source}</div>)}<small>Demo data is synthetic and clearly labeled.</small></section></aside></div>
     </> : selected ? <>
       <div className="claim-topline"><button className="text-link" onClick={() => navigate('dashboard')}>← Dashboard</button><span>{selected.synthetic_demo ? 'SYNTHETIC DEMO DATA' : 'LOCAL CASE FILE'}</span></div>
       <div className="page-intro claim-intro"><div><span className="eyebrow">CLAIM INVESTIGATION · {selected.claim_id || selected.id}</span><h1>{selected.farm}</h1><p>{selected.cause} · {selected.crop} · {selected.location}</p></div><span className={`case-status large ${selected.status === 'READY_FOR_ADJUSTER_REVIEW' ? 'ready' : 'review'}`}>{caseStatus(selected.status)}</span></div>
       <div className="claim-meta"><div><span>REPORTED LOSS</span><strong>{dateLabel(selected.loss_date)}</strong></div><div><span>FIELD AREA</span><strong>{selected.acreage || '—'} acres</strong></div><div><span>MEASURED CHECKS</span><strong>{selected.report?.findings?.length || 0}</strong></div><div><span>LOCAL AGENT</span><strong>{investigating ? 'Investigating…' : selected.agent_run ? 'Run saved' : 'Ready to run'}</strong></div></div>
       <div className="claim-layout"><aside className="claim-context"><section className="surface"><div className="surface-heading"><div><span className="eyebrow">FIELD CONTEXT</span><h2>Claimed field</h2></div><MapPin size={19} /></div><FieldMap boundary={selected.boundary} selectedField={selected.selected_field} /><div className="context-facts"><div><span>Reported cause</span><strong>{selected.cause}</strong></div><div><span>Claimed crop</span><strong>{selected.crop}</strong></div><div><span>Loss date</span><strong>{dateLabel(selected.loss_date)}</strong></div></div></section><section className="surface"><span className="eyebrow">VEGETATION TREND</span><h2>Field NDVI</h2><MiniTrend points={selected.ndvi_series} /></section></aside>
-        <section className="claim-main"><div className="surface investigation-panel">
+        <section className="claim-main">{selected.claim_description && <section className="surface"><span className="eyebrow">CLAIMANT STATEMENT</span><p className="claim-statement">{selected.claim_description}</p><small>Reported statement, to be checked against evidence.</small></section>}<AgentReport key={selected.id} investigation={selected} />{selected.tasks?.length > 0 && <section className="surface"><span className="eyebrow">FOLLOW-UP EVIDENCE</span><h2>What is still needed</h2>{selected.tasks.map(task => <div className="followup-item" key={task._id}><strong>{task.title}</strong><p>{task.reason}</p><small>{task.status === 'OPEN' ? 'Awaiting evidence' : 'Resolved'}</small></div>)}</section>}<div className="surface investigation-panel">
           <span className="eyebrow">INVESTIGATION WORKFLOW</span><h2>Evidence progress</h2>
           <p>The local agent chooses crop, rainfall, vegetation, and neighbor checks, then prepares the evidence report for human review. Demo measurements use synthetic assets.</p>
           <div className="progress-list">
@@ -195,14 +290,15 @@ export default function App() {
             {selected.workflow.map((step, index) => <div className={`progress-item ${step.state === 'error' ? 'failed' : 'done'}`} key={`${step.stage}-${index}`}><span>{step.state === 'error' ? <X size={16} /> : <Check size={16} />}</span><div><strong>{step.stage.replaceAll('_', ' ')}</strong><small>{step.detail}</small></div></div>)}
             {!selected.report_saved && <div className={`progress-item ${investigating ? 'active' : ''}`}><span><Activity size={16} /></span><div><strong>Complete measured checks</strong><small>{investigating ? 'Running the next local evidence check…' : 'Ready to run the demo investigation'}</small></div></div>}
           </div>
-          {selected.origin === 'demo' && <button className="button primary run-button" onClick={runInvestigation} disabled={investigating}><Activity size={18} /> {investigating ? 'Running investigation…' : selected.report_saved ? 'Run fresh investigation' : 'Run investigation'}</button>}
+          {<button className="button primary run-button" onClick={runInvestigation} disabled={investigating}><Activity size={18} /> {investigating ? 'Running investigation…' : selected.report_saved ? (selected.origin === 'demo' ? 'Run fresh investigation' : 'Investigate again') : 'Run investigation'}</button>}
           {actionError && <p className="error-message">{actionError}</p>}
         </div>
           <section className="surface evidence-section"><div className="surface-heading"><div><span className="eyebrow">SOURCE-BACKED FINDINGS</span><h2>Evidence summary</h2></div><span className="count-tag">{selected.report.findings.length} checks</span></div><div className="evidence-grid">{evidenceOrder.map(({ check, label, key, icon: Icon }) => { const finding = selected.report.findings.find(item => item.check === check); if (!finding) return null; return <div className="evidence-card" key={key}><div className="evidence-card-top"><span className="evidence-icon"><Icon size={20} /></span><span className={`finding-status ${finding.status}`}>{statusLabel(finding.status)}</span></div><h3>{label}</h3><p>{finding.detail}</p><small>Source: {finding.source}</small></div> })}</div></section>
           <section className="surface assessment"><span className="eyebrow">FORENSIC EVIDENCE SUMMARY</span><h2>{selected.report.evidence_summary.supported} of {selected.report.findings.length} checks supported</h2><p>{selected.report.assessment}</p><div className="assessment-note"><ShieldCheck size={18} /> FieldTrace does not approve or deny claims. A qualified adjuster reviews this evidence.</div><div className="report-actions"><button className="button secondary" onClick={() => setReportOpen(!reportOpen)}><FileText size={17} /> {reportOpen ? 'Hide report' : 'View report'}</button>{selected.report_saved && <a className="button secondary" href={`/api/cases/${encodeURIComponent(selected.id)}/report.md`} download={`${selected.id}-evidence.md`}><Download size={17} /> Download Markdown</a>}</div>{reportOpen && <div className="report-details"><h3>Measured findings</h3>{selected.report.findings.map(finding => <div key={finding.check}><strong>{finding.check} · {statusLabel(finding.status)}</strong><p>{finding.detail}</p><small>{finding.source}</small></div>)}<h3>Agent response</h3><p>{selected.agent_run?.summary || 'No completed agent run saved yet.'}</p><h3>Action audit</h3><pre>{JSON.stringify(selected.actions, null, 2)}</pre><h3>Method</h3><p>{selected.report.method}</p></div>}</section>
         </section></div>
-    </> : <div className="page-state">No cases found. Import a case to begin.</div>}</main>}
+    </> : <div className="page-state">No claim selected. Create a new claim from the dashboard to begin.</div>}</main>}
     <footer className="site-footer"><span>FieldTrace · Crop insurance evidence assistant</span><span>Local data · Human review · OpenClaw · Ollama · gpt-oss:20b</span></footer>
+    {claimOpen && <ClaimModal onClose={() => setClaimOpen(false)} onCreated={onCreated} onAdvanced={() => { setClaimOpen(false); setUploadOpen(true) }} />}
     {uploadOpen && <UploadModal onClose={() => setUploadOpen(false)} onCreated={onCreated} />}
   </div>
 }
