@@ -1,3 +1,6 @@
 .venv/
 __pycache__/
 sample_case/
+.env
+.env.*
+!.env.example

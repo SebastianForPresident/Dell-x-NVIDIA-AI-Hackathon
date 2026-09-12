@@ -18,6 +18,7 @@ from forensics import (
 )
 from local_narrative import check_local_model, extract_claim_fields, write_narrative
 from visuals import field_svg
+from persistence_ui import persistence_panel
 
 
 st.set_page_config(page_title="Field Evidence | Crop Insurance Forensics", page_icon="🌾", layout="wide")
@@ -35,7 +36,7 @@ with st.sidebar:
     expected_crop = st.selectbox("Claimed crop", ["Corn", "Soybeans", "Winter wheat", "Other"])
     st.caption("Thresholds are demo screening rules, not insurance standards.")
     st.divider()
-    st.caption("OpenShell + Qwen readiness")
+    st.caption("Legacy OpenShell route — OpenClaw integration pending")
     if st.button("Test local model route"):
         try:
             reply = check_local_model()
@@ -180,6 +181,14 @@ if demo:
 else:
     report = (st.session_state.get("report")
               if st.session_state.get("report_signature") == current_signature else None)
+
+persistence_panel(
+    report,
+    "synthetic-demo-v1" if demo else current_signature,
+    {"claimed_crop": expected_crop,
+     "features": display_features if demo or features else [],
+     "selected_field": display_selected if demo or features else None},
+)
 
 if report:
     st.divider()

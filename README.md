@@ -1,5 +1,10 @@
 # Crop Insurance Forensics
 
+**MongoDB persistence milestone:** see [PERSISTENCE.md](PERSISTENCE.md) for setup,
+data model, save/reopen workflow, and future OpenClaw integration seams. The
+OpenShell/Qwen deployment section below is legacy; the chosen target runtime is
+OpenClaw + Ollama + `gpt-oss:20b`, whose integration is still pending.
+
 A local evidence assistant for crop-insurance adjusters. It reads a claim's field boundary, weather history, crop layer, and before/after imagery, then produces an auditable evidence package. It never approves or denies a claim.
 
 ## Run locally
