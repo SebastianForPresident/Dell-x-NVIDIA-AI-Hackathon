@@ -60,7 +60,7 @@ class ClaimRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     farm: str = Field(min_length=1, max_length=200)
     description: str = Field(min_length=10, max_length=2000)
-    field_id: Literal["dewitt-demo-field", "unregistered"]
+    field_id: Literal["dewitt-public-2025", "dewitt-demo-field", "unregistered"]
     cause: Literal["Drought", "Flood", "Other"]
     crop: Literal["Corn", "Soybeans", "Winter wheat", "Other"]
     loss_date: date

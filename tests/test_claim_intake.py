@@ -29,8 +29,27 @@ class ClaimIntakeTests(unittest.TestCase):
         self.folder.cleanup()
 
     def test_catalog_and_listing_do_not_seed_claims(self):
-        self.assertEqual(len(self.client.get('/api/local-fields').json()), 1)
+        fields = self.client.get('/api/local-fields').json()
+        self.assertEqual(len(fields), 2)
+        self.assertFalse(fields[0]['synthetic'])
+        self.assertTrue(fields[1]['synthetic'])
         self.assertEqual(self.client.get('/api/cases').json(), [])
+
+    def test_public_evidence_claim_has_real_provenance_and_measurements(self):
+        repository_assets = os.path.abspath('data/case_assets')
+        with patch.dict(os.environ, {'CROP_ASSET_DIR': repository_assets}):
+            body = {**self.body, 'field_id': 'dewitt-public-2025', 'loss_date': '2025-09-18'}
+            response = self.client.post('/api/claims', json=body)
+            self.assertEqual(response.status_code, 201, response.text)
+            case = response.json()
+            self.assertFalse(case['synthetic_demo'])
+            tool = bound_tools(self.service, case['id'])
+            rainfall = tool.invoke('check_rainfall', {}, 'real-rain')['data']['finding']
+            vegetation = tool.invoke('check_vegetation_change', {}, 'real-ndvi')['data']['finding']
+            self.assertEqual(rainfall['values']['rainfall_mm'], 1.3)
+            self.assertEqual(rainfall['provenance']['datasets'][0]['provider'], 'NOAA NCEI')
+            self.assertEqual(vegetation['values']['change'], -0.541)
+            self.assertEqual(vegetation['provenance']['datasets'][0]['provider'], 'Copernicus/ESA')
 
     def test_written_claim_binds_local_assets_without_running_tools(self):
         response = self.client.post('/api/claims', json=self.body)

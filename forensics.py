@@ -18,6 +18,7 @@ class Finding:
     detail: str
     source: str
     values: dict[str, Any]
+    provenance: dict[str, Any] | None = None
 
 
 CDL_CROPS = {

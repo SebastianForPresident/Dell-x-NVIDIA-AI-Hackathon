@@ -1,0 +1,72 @@
+{
+  "package_id": "dewitt-public-2025-v1",
+  "claim_scenario": "fictional",
+  "analysis_area": "CDL-derived crop analysis area; not a parcel boundary",
+  "loss_date": "2025-09-18",
+  "datasets": {
+    "crop": {
+      "provider": "USDA NASS",
+      "product": "Cropland Data Layer",
+      "year": 2025,
+      "url": "https://nassgeodata.gmu.edu/nass_data_cache/byfips/CDL_2025_17.zip",
+      "local_file": "usda_cdl_2025.tif"
+    },
+    "weather": {
+      "provider": "NOAA NCEI",
+      "product": "GHCN-Daily",
+      "station_id": "USW00003887",
+      "station_name": "Decatur Airport, Illinois",
+      "window": [
+        "2025-08-20",
+        "2025-09-18"
+      ],
+      "baseline": "1991\u20132020 daily means from the same station record",
+      "url": "https://www.ncei.noaa.gov/pub/data/ghcn/daily/all/USW00003887.dly",
+      "source_sha256": "349974734ca77b5b3a492cf55541525b4a204cee8af8487d6b16b6285c2ed618",
+      "local_file": "noaa_ghcn_daily.csv"
+    },
+    "before": {
+      "provider": "Copernicus/ESA",
+      "product": "Sentinel-2 MSI Level-2A BOA reflectance",
+      "item_id": "S2A_16TCK_20250809_0_L2A",
+      "date": "2025-08-09",
+      "catalog": "https://earth-search.aws.element84.com/v1",
+      "local_file": "sentinel2_before.tif"
+    },
+    "after": {
+      "provider": "Copernicus/ESA",
+      "product": "Sentinel-2 MSI Level-2A BOA reflectance",
+      "item_id": "S2C_16TCK_20250926_0_L2A",
+      "date": "2025-09-26",
+      "catalog": "https://earth-search.aws.element84.com/v1",
+      "local_file": "sentinel2_after.tif"
+    }
+  },
+  "processing": {
+    "crop": "Dominant CDL class inside USDA-derived analysis geometry",
+    "weather": "30-day total and sum of 1991\u20132020 calendar-day means",
+    "vegetation": "Mean NDVI=(B08-B04)/(B08+B04) over valid pixels"
+  },
+  "files": {
+    "analysis_areas.geojson": {
+      "sha256": "772a2494d90c85ae833e04d863729665560f7ea1f96aa9359663ffeb8f27a882",
+      "bytes": 36478
+    },
+    "usda_cdl_2025.tif": {
+      "sha256": "27fe55776b2ab9ff26560fdbb02672bab1676793bae41c4a6fd319a13b684b1b",
+      "bytes": 13308
+    },
+    "sentinel2_before.tif": {
+      "sha256": "7e53344713ddfe1ffdbaa43525b02011d4eb6131401693f3d640ed4c5e405683",
+      "bytes": 98678
+    },
+    "sentinel2_after.tif": {
+      "sha256": "9cdc69f05a35e68f0940192d60866efa98f6de03d6705bf862df56c96087f8ab",
+      "bytes": 117429
+    },
+    "noaa_ghcn_daily.csv": {
+      "sha256": "bdfc60f916e7d6e1b57a4bd18ef98d9ce0332c7a1c0f75a85500afe330c77f56",
+      "bytes": 731
+    }
+  }
+}

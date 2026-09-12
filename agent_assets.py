@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 import hashlib
+from typing import Any
 
 from forensics import load_boundary
 
@@ -22,6 +23,7 @@ class CaseAssets:
     red_band: int = 1
     nir_band: int = 2
     weather_unit: str = "mm"
+    provenance: dict[str, Any] | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "root", Path(self.root).resolve(strict=True))
@@ -53,6 +55,7 @@ class CaseAssets:
     def manifest(self):
         result = {key: getattr(self, key) for key in (
             "before_date", "after_date", "selected_field", "red_band", "nir_band", "weather_unit")}
+        result["provenance"] = self.provenance
         for kind in ("boundary", "weather", "crop", "before", "after"):
             path = self.path(kind)
             if path is None:

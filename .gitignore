@@ -4,6 +4,10 @@ sample_case/
 frontend/node_modules/
 frontend/dist/
 data/case_assets/
+!data/case_assets/
+data/case_assets/*
+!data/case_assets/dewitt-public-2025-v1/
+!data/case_assets/dewitt-public-2025-v1/**
 .env
 .env.*
 !.env.example

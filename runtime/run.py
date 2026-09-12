@@ -62,6 +62,7 @@ If synthetic_demo is true, begin your final response with "Synthetic demo:" and 
         raise RuntimeError(f'OpenClaw failed; see {folder}/stderr.log')
     output = json.loads((folder / 'stdout.json').read_text())
     receipt = output['meta']['agentMeta']['terminalReceipt']
+    receipt['fallbacks'] = config['agents']['defaults']['model']['fallbacks']
     if receipt['effective']['provider'] != 'ollama' or receipt['effective']['model'] != 'gpt-oss:20b' or receipt.get('rerouted'):
         raise RuntimeError('Unexpected inference route in OpenClaw receipt')
     exposed = {item['name'] for item in output['meta']['systemPromptReport']['tools']['entries']}

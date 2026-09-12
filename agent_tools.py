@@ -159,6 +159,17 @@ class AgentTools:
         def missing(detail):
             return Finding(label, "unavailable", detail, "Registered case assets", {})
 
+        provenance = assets.provenance or {}
+
+        def sourced(finding, *dataset_keys):
+            datasets = [deepcopy(provenance[key]) for key in dataset_keys if key in provenance]
+            finding.provenance = {"datasets": datasets} if datasets else None
+            if datasets:
+                finding.source = "; ".join(
+                    f"{item.get('provider', 'Unknown provider')} {item.get('product', 'dataset')}"
+                    for item in datasets)
+            return finding
+
         if name == "check_rainfall":
             path = assets.path("weather")
             if path is None:
@@ -168,8 +179,7 @@ class AgentTools:
                    (r["normal_mm"] is not None and not math.isfinite(r["normal_mm"])) for r in rows):
                 raise ValueError("Weather observations must be finite numbers.")
             finding = weather_finding(rows, loss_date, cause=self.metadata["reported_cause"])
-            finding.source = self.manifest["weather"]["name"]
-            return finding
+            return sourced(finding, "weather")
         fields, geometry = assets.fields()
         if geometry is None:
             return missing("No field boundary registered. Request a field boundary.")
@@ -178,8 +188,7 @@ class AgentTools:
             if path is None:
                 return missing("No crop classification raster registered.")
             finding = crop_finding(path, geometry, self.metadata["claimed_crop"])
-            finding.source = self.manifest["crop"]["name"]
-            return finding
+            return sourced(finding, "crop")
         before, after = assets.path("before"), assets.path("after")
         if before is None or after is None or assets.before_date is None or assets.after_date is None:
             return missing("Before/after imagery and both image dates are required.")
@@ -193,7 +202,7 @@ class AgentTools:
 
         if name == "check_vegetation_change":
             old, new = change_for(geometry)
-            return vegetation_finding(old, new, before_date, after_date, loss_date, source)
+            return sourced(vegetation_finding(old, new, before_date, after_date, loss_date, source), "before", "after")
         if not before_date < loss_date <= after_date:
             return Finding(label, "inconclusive", "Neighbor imagery does not bracket the loss date.", source, {})
         changes = []
@@ -211,4 +220,4 @@ class AgentTools:
             finding.status = "inconclusive"
             finding.detail += f" {invalid} other field(s) had insufficient valid pixels."
             finding.values["fields_unavailable"] = invalid
-        return finding
+        return sourced(finding, "before", "after", "boundary")

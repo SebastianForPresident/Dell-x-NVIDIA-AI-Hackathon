@@ -48,6 +48,7 @@ def bound_tools(service, investigation_id, actor="agent"):
              for key in ("boundary", "weather", "crop", "before", "after")}
     options = {key: manifest[key] for key in
                ("before_date", "after_date", "selected_field", "red_band", "nir_band", "weather_unit")}
+    options["provenance"] = manifest.get("provenance")
     return AgentTools(service, investigation_id, CaseAssets(folder, **paths, **options), actor=actor)
 
 
@@ -93,6 +94,7 @@ def project(service, investigation_id):
             "synthetic_demo": meta.get("synthetic_demo", False), "origin": meta.get("origin", "historical"),
             "boundary": boundary, "selected_field": record["context"].get("agent_asset_manifest", {}).get("selected_field", 0),
             "weather_series": weather, "ndvi_series": ndvi, "report": preview,
+            "provenance": record["context"].get("agent_asset_manifest", {}).get("provenance"),
             "agent_run": next((a["result"] for a in reversed(actions) if a["tool"] == "openclaw_run"), None),
             "report_saved": report is not None, "documents": documents, "ai_review": record.get("ai_review"),
             "workflow": workflow, "actions": actions, "tasks": package["tasks"],
