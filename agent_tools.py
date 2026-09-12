@@ -39,7 +39,10 @@ TOOL_SCHEMAS = [
 
 
 class AgentTools:
-    def __init__(self, service, investigation_id, assets):
+    def __init__(self, service, investigation_id, assets, actor="agent"):
+        if actor not in {"agent", "demo"}:
+            raise ValueError("Unsupported tool actor.")
+        self.actor = actor
         self.service, self.investigation_id, self.assets = service, investigation_id, assets
         record = service.load_package(investigation_id)["investigation"]
         self.metadata = record["metadata"]
@@ -48,7 +51,7 @@ class AgentTools:
             raise ValueError("Assets do not match this investigation's registered manifest.")
 
     @classmethod
-    def start(cls, service, metadata, assets):
+    def start(cls, service, metadata, assets, actor="agent"):
         """Trusted application entry point, not a model tool."""
         required = {"claim_id", "reported_cause", "reported_loss_date", "field", "claimed_crop", "synthetic_demo"}
         if not required <= metadata.keys():
@@ -61,7 +64,7 @@ class AgentTools:
         manifest = assets.manifest()
         signature = stable_id("agent-tools-v1", metadata, manifest)
         key = service.start_investigation(metadata, signature, {"agent_asset_manifest": manifest})
-        return cls(service, key, assets)
+        return cls(service, key, assets, actor=actor)
 
     def schemas(self):
         return deepcopy(TOOL_SCHEMAS)
@@ -89,7 +92,7 @@ class AgentTools:
                 result = {"ok": False, "error": {"code": "CALL_ID_CONFLICT", "message": "Call ID already used with different inputs."}}
                 self.service.record_action(self.investigation_id,
                                            "conflict:" + stable_id(call_id, name, arguments),
-                                           name, arguments, result, actor="agent")
+                                           name, arguments, result, actor=self.actor)
                 return result
             return previous["result"]
         try:
@@ -114,7 +117,7 @@ class AgentTools:
             message = str(exc).replace(str(self.assets.root), "<case-assets>")
             code = "INVALID_INPUT_OR_EVIDENCE" if isinstance(exc, (ValueError, KeyError, TypeError)) else "TOOL_EXECUTION_ERROR"
             result = {"ok": False, "error": {"code": code, "message": message}}
-        self.service.record_action(self.investigation_id, action_key, name, arguments, result, actor="agent")
+        self.service.record_action(self.investigation_id, action_key, name, arguments, result, actor=self.actor)
         return result
 
     def _execute(self, name, args):
@@ -128,12 +131,12 @@ class AgentTools:
                                    for t in package["tasks"] if t["status"] == "OPEN"]}
         status = self.service.load_package(key)["investigation"]["status"]
         if name == "set_case_status":
-            self.service.set_case_status(key, args["status"], args["reason"], actor="agent")
+            self.service.set_case_status(key, args["status"], args["reason"], actor=self.actor)
             return {"status": args["status"]}
         if status == "NEW":
-            self.service.set_case_status(key, "INVESTIGATING", "Agent began investigation", actor="agent")
+            self.service.set_case_status(key, "INVESTIGATING", "Evidence investigation began", actor=self.actor)
         if name == "create_follow_up_task":
-            task_id = self.service.create_follow_up_task(key, **args, actor="agent")
+            task_id = self.service.create_follow_up_task(key, **args, actor=self.actor)
             package = self.service.load_package(key)
             task = next(t for t in package["tasks"] if t["_id"] == task_id)
             return {"task_id": task_id, "task_status": task["status"],

@@ -26,7 +26,7 @@ async function api(path, options) {
   const data = contentType.includes('application/json') ? await response.json() : await response.text()
   if (!response.ok) {
     const detail = typeof data === 'object' ? data.detail : data
-    throw new Error(Array.isArray(detail) ? detail.map(item => item.msg).join(', ') : detail || `Request failed (${response.status})`)
+    throw new Error(Array.isArray(detail) ? detail.map(item => item.msg).join(', ') : (typeof detail === 'object' ? JSON.stringify(detail) : detail) || `Request failed (${response.status})`)
   }
   return data
 }
@@ -43,8 +43,8 @@ function StatusPill({ status }) {
 }
 
 function CasePill({ status }) {
-  return <span className={`case-pill ${status === 'Evidence ready' ? 'ready' : 'review'}`}>
-    <span className="pulse-dot" />{status}
+  return <span className={`case-pill ${status === 'READY_FOR_ADJUSTER_REVIEW' ? 'ready' : 'review'}`}>
+    <span className="pulse-dot" />{status.replaceAll("_", " ")}
   </span>
 }
 
@@ -172,7 +172,7 @@ function UploadModal({ onClose, onCreated }) {
   ]
   return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <div className="upload-modal" role="dialog" aria-modal="true" aria-label="New investigation">
-      <div className="modal-header"><div><div className="eyebrow">NEW INVESTIGATION</div><h2>Import a claim package</h2><p>All files stay on this machine. Raw rasters are analyzed, then discarded; evidence is saved to local MongoDB.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={20} /></button></div>
+      <div className="modal-header"><div><div className="eyebrow">NEW INVESTIGATION</div><h2>Import a claim package</h2><p>Evidence files stay on the application host. Evidence files are retained locally so investigation tools can inspect them again.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={20} /></button></div>
       <form onSubmit={submit}>
         <div className="modal-scroll">
           <div className="form-section-title">Claim details</div>
@@ -200,7 +200,7 @@ function UploadModal({ onClose, onCreated }) {
           <label className="synthetic-checkbox"><input type="checkbox" name="synthetic_demo" value="true" /> This is synthetic demonstration data</label>
           {error && <div className="form-error">{error}</div>}
         </div>
-        <div className="modal-actions"><button type="button" className="button ghost" onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={busy}>{busy ? 'Analyzing evidence…' : 'Run investigation'}<ArrowRight size={16} /></button></div>
+        <div className="modal-actions"><button type="button" className="button ghost" onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={busy}>{busy ? 'Analyzing evidence…' : 'Analyze evidence (deterministic)'}<ArrowRight size={16} /></button></div>
       </form>
     </div>
   </div>
@@ -216,25 +216,31 @@ export default function App() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
-  const [modelStatus, setModelStatus] = useState('unchecked')
-  const [modelMessage, setModelMessage] = useState('')
-  const [drafting, setDrafting] = useState(false)
+  const [runningDemo, setRunningDemo] = useState(false)
+  const [actionError, setActionError] = useState('')
   const [mobileMenu, setMobileMenu] = useState(false)
 
   useEffect(() => {
     Promise.all([api('/api/health'), api('/api/cases')])
-      .then(([, rows]) => { setCases(rows); if (rows.length) setSelectedId(rows[0].id) })
+      .then(async ([, rows]) => { const items = rows.length ? rows : [await api('/api/demo', { method: 'POST' })]; setCases(items); setSelectedId(items[0].id) })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
   }, [])
 
+  useEffect(() => {
+    let live = true
+    const timer = setInterval(() => api('/api/cases').then(rows => { if (live) { setCases(rows); setActionError('') } })
+      .catch(err => { if (live) setActionError(err.message) }), 5000)
+    return () => { live = false; clearInterval(timer) }
+  }, [])
+
   const selected = cases.find(item => item.id === selectedId) || cases[0]
   const filtered = useMemo(() => cases.filter(item => {
-    const matchesText = `${item.id} ${item.farm} ${item.location} ${item.crop}`.toLowerCase().includes(query.toLowerCase())
+    const matchesText = `${item.claim_id} ${item.farm} ${item.location} ${item.crop}`.toLowerCase().includes(query.toLowerCase())
     const matchesFilter = filter === 'All cases' || item.status === filter
     return matchesText && matchesFilter
   }), [cases, query, filter])
-  const readyCount = cases.filter(item => item.status === 'Evidence ready').length
+  const readyCount = cases.filter(item => item.status === 'READY_FOR_ADJUSTER_REVIEW').length
   const checksCount = cases.reduce((sum, item) => sum + (item.report?.findings?.length || 0), 0)
 
   function navigate(next) {
@@ -247,23 +253,38 @@ export default function App() {
     setCases(current => [item, ...current]); setSelectedId(item.id); setActiveTab('Overview'); setSection('Investigations'); setUploadOpen(false)
   }
 
-  async function testModel() {
-    setModelStatus('checking'); setModelMessage('')
-    try {
-      const result = await api('/api/runtime/check-model', { method: 'POST' })
-      setModelStatus('ready'); setModelMessage(result.response)
-    } catch (err) { setModelStatus('offline'); setModelMessage(err.message) }
+  function updateCase(updated) {
+    setCases(current => current.map(item => item.id === updated.id ? updated : item))
   }
 
-  async function draftNarrative() {
-    if (!selected) return
-    setDrafting(true)
+  async function loadDemo(fresh = false) {
     try {
-      const result = await api(`/api/cases/${encodeURIComponent(selected.id)}/narrative`, { method: 'POST' })
-      setCases(current => current.map(item => item.id === selected.id ? { ...item, narrative: result.narrative } : item))
-      setModelStatus('ready')
-    } catch (err) { setModelStatus('offline'); setModelMessage(err.message) }
-    finally { setDrafting(false) }
+      const item = await api(fresh ? '/api/demo/reset' : '/api/demo', { method: 'POST' })
+      setCases(current => [item, ...current.filter(row => row.id !== item.id)])
+      setSelectedId(item.id); setActiveTab('Overview'); setSection('Investigations')
+    } catch (err) { setActionError(err.message) }
+  }
+
+  async function runDemo() {
+    if (!selected) return
+    setRunningDemo(true); setActionError('')
+    try {
+      for (let step = 0; step < 6; step++) {
+        const updated = await api(`/api/cases/${selected.id}/demo-step`, { method: 'POST' })
+        updateCase(updated)
+        if (['READY_FOR_ADJUSTER_REVIEW', 'NEEDS_EVIDENCE'].includes(updated.status)) break
+        await new Promise(resolve => setTimeout(resolve, 350))
+      }
+    } catch (err) { setActionError(err.message) }
+    finally { setRunningDemo(false) }
+  }
+
+  async function resolveTask(taskId, resolution) {
+    try {
+      updateCase(await api(`/api/cases/${selected.id}/tasks/${taskId}/resolve`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resolution }),
+      }))
+    } catch (err) { setActionError(err.message) }
   }
 
   const menu = [
@@ -289,24 +310,28 @@ export default function App() {
       {loading ? <div className="loading-state"><div className="loading-ring" /><p>Loading local investigations…</p></div> : error ? <div className="offline-state"><Database size={36} /><h1>Local database is not connected</h1><p>{error}</p><p>Start MongoDB and the Python API using the commands in the README, then refresh this page.</p><button className="button primary" onClick={() => window.location.reload()}>Try again <ArrowRight size={16} /></button></div> : <div className="content-wrap">
         {section === 'System status' ? <>
           <div className="page-heading"><div><div className="eyebrow">INFRASTRUCTURE</div><h1>System status</h1><p>All services are designed to run on the local GB10.</p></div></div>
-          <div className="system-grid"><div className="system-card"><div className="system-icon green"><Database size={23} /></div><h3>MongoDB</h3><p>Local case records and evidence packages</p><span className="system-state green"><CheckCircle2 size={15} /> Connected</span></div><div className="system-card"><div className="system-icon amber"><Cpu size={23} /></div><h3>OpenShell + Qwen</h3><p>Private report drafting via inference.local</p><span className={`system-state ${modelStatus === 'ready' ? 'green' : modelStatus === 'offline' ? 'red' : 'amber'}`}>{modelStatus === 'ready' ? 'Connected' : modelStatus === 'offline' ? 'Unavailable' : 'Not checked'}</span><button className="button secondary" onClick={testModel} disabled={modelStatus === 'checking'}>{modelStatus === 'checking' ? 'Checking…' : 'Test model route'}<ArrowUpRight size={15} /></button>{modelMessage && <small className="system-message">{modelMessage}</small>}</div><div className="system-card"><div className="system-icon blue"><ShieldCheck size={23} /></div><h3>Evidence tools</h3><p>Raster, weather, crop, and comparison checks</p><span className="system-state green"><CheckCircle2 size={15} /> Available</span></div></div>
+          <div className="system-grid"><div className="system-card"><div className="system-icon green"><Database size={23} /></div><h3>MongoDB</h3><p>Local case records and evidence packages</p><span className="system-state green"><CheckCircle2 size={15} /> Connected</span></div><div className="system-card"><div className="system-icon amber"><Cpu size={23} /></div><h3>Local agent runtime</h3><p>OpenClaw ? Ollama ? gpt-oss:20b</p><span className="system-state amber">Integration pending</span><small className="system-message">No inference runs in this milestone. Demo controls execute deterministic tools.</small></div><div className="system-card"><div className="system-icon blue"><ShieldCheck size={23} /></div><h3>Evidence tools</h3><p>Raster, weather, crop, and comparison checks</p><span className="system-state green"><CheckCircle2 size={15} /> Available</span></div></div>
           <div className="info-banner"><ShieldCheck size={20} /><div><strong>Review boundary</strong><p>Findings are screening evidence. They do not determine coverage, causation, or claim outcome.</p></div></div>
         </> : <>
-          <div className="page-heading"><div><div className="eyebrow">FIELD INTELLIGENCE / 2026 SEASON</div><h1>{section === 'Dashboard' ? 'Good morning, adjuster.' : section === 'Evidence library' ? 'Evidence library' : 'Investigations'}<span className="heading-spark">✳</span></h1><p>{section === 'Dashboard' ? 'A clear view of the cases waiting for your review.' : section === 'Evidence library' ? 'Trace every finding back to the source and measurement.' : 'Turn geospatial data into a reviewable evidence package.'}</p></div><button className="button primary new-case" onClick={() => setUploadOpen(true)}><Plus size={18} /> New investigation</button></div>
+          <div className="page-heading"><div><div className="eyebrow">FIELD INTELLIGENCE / 2026 SEASON</div><h1>{section === 'Dashboard' ? 'Good morning, adjuster.' : section === 'Evidence library' ? 'Evidence library' : 'Investigations'}<span className="heading-spark">✳</span></h1><p>{section === 'Dashboard' ? 'A clear view of the cases waiting for your review.' : section === 'Evidence library' ? 'Trace every finding back to the source and measurement.' : 'Turn geospatial data into a reviewable evidence package.'}</p></div><button className="button primary new-case" onClick={() => setUploadOpen(true)}><Plus size={18} /> New investigation</button><button className="button secondary" onClick={() => loadDemo()}>Load DeWitt demo</button></div>
 
           <div className="stats-grid"><div className="stat-card"><div className="stat-label">TOTAL INVESTIGATIONS <FolderOpen size={18} /></div><div className="stat-number">{cases.length.toString().padStart(2, '0')}</div><div className="stat-foot">Cases in local workspace <ArrowUpRight size={15} /></div></div><div className="stat-card"><div className="stat-label">EVIDENCE PACKAGES <FileText size={18} /></div><div className="stat-number">{readyCount.toString().padStart(2, '0')}</div><div className="stat-foot">Ready for human review <ArrowUpRight size={15} /></div></div><div className="stat-card highlighted"><div className="stat-label">CHECKS COMPLETED <Activity size={18} /></div><div className="stat-number">{checksCount.toString().padStart(2, '0')}</div><div className="stat-foot">Across all local cases <span className="stat-mini-line" /></div></div></div>
 
-          <div className="workspace-grid"><section className="case-list-card"><div className="list-header"><div><div className="eyebrow">YOUR WORKSPACE</div><h2>Case queue <span>{cases.length}</span></h2></div><button className="tiny-icon" onClick={() => setUploadOpen(true)} aria-label="New case"><Plus size={18} /></button></div><div className="search-box"><Search size={17} /><input placeholder="Search claims, farms, locations…" value={query} onChange={event => setQuery(event.target.value)} /></div><div className="filter-row">{['All cases', 'Evidence ready', 'Needs review'].map(value => <button key={value} className={filter === value ? 'selected' : ''} onClick={() => setFilter(value)}>{value === 'All cases' ? 'All' : value === 'Evidence ready' ? 'Ready' : 'Review'}</button>)}</div><div className="case-list">{filtered.map(item => <button className={`case-row ${selected?.id === item.id ? 'selected' : ''}`} key={item.id} onClick={() => { setSelectedId(item.id); setActiveTab(section === 'Evidence library' ? 'Evidence' : 'Overview') }}><div className="case-row-top"><span className="case-id">{item.id}</span><ChevronRight size={16} /></div><strong>{item.farm}</strong><span className="case-location"><MapPin size={13} />{item.location}</span><div className="case-row-bottom"><span className={`cause-tag ${item.cause.toLowerCase()}`}>{item.cause}</span><span>{formatDate(item.loss_date, { month: 'short', day: 'numeric' })}</span></div></button>)}{filtered.length === 0 && <div className="list-empty">No cases match this search.</div>}</div><div className="list-footer"><span><span className="small-dot" /> Local database synced</span><Database size={15} /></div></section>
+          <div className="workspace-grid"><section className="case-list-card"><div className="list-header"><div><div className="eyebrow">YOUR WORKSPACE</div><h2>Case queue <span>{cases.length}</span></h2></div><button className="tiny-icon" onClick={() => setUploadOpen(true)} aria-label="New case"><Plus size={18} /></button></div><div className="search-box"><Search size={17} /><input placeholder="Search claims, farms, locations…" value={query} onChange={event => setQuery(event.target.value)} /></div><div className="filter-row">{['All cases', 'READY_FOR_ADJUSTER_REVIEW', 'NEEDS_EVIDENCE', 'NEW', 'INVESTIGATING'].map(value => <button key={value} className={filter === value ? 'selected' : ''} onClick={() => setFilter(value)}>{value === 'All cases' ? 'All' : value === 'READY_FOR_ADJUSTER_REVIEW' ? 'Ready' : value === 'NEEDS_EVIDENCE' ? 'Review' : value === 'NEW' ? 'New' : 'Active'}</button>)}</div><div className="case-list">{filtered.map(item => <button className={`case-row ${selected?.id === item.id ? 'selected' : ''}`} key={item.id} onClick={() => { setSelectedId(item.id); setActiveTab(section === 'Evidence library' ? 'Evidence' : 'Overview') }}><div className="case-row-top"><span className="case-id">{item.claim_id}</span><ChevronRight size={16} /></div><strong>{item.farm}</strong><span className="case-location"><MapPin size={13} />{item.location}</span><div className="case-row-bottom"><span className={`cause-tag ${item.cause.toLowerCase()}`}>{item.cause}</span><span>{formatDate(item.loss_date, { month: 'short', day: 'numeric' })}</span></div></button>)}{filtered.length === 0 && <div className="list-empty">No cases match this search.</div>}</div><div className="list-footer"><span><span className="small-dot" /> Local database synced</span><Database size={15} /></div></section>
 
-            {selected && <section className="case-detail"><div className="case-hero"><div className="case-hero-top"><div className="case-breadcrumb">CASE FILE <span>/</span> {selected.id}</div><div className="case-hero-badges">{selected.synthetic_demo && <span className="demo-pill">SYNTHETIC DEMO</span>}<CasePill status={selected.status} /></div></div><div className="case-title-row"><div><h2>{selected.farm}</h2><p><MapPin size={15} />{selected.location} <span className="meta-separator">·</span> {selected.acreage || '—'} acres <span className="meta-separator">·</span> {selected.crop}</p></div><a className="button outline export-button" href={`/api/cases/${encodeURIComponent(selected.id)}/report.md`} download={`${selected.id}-evidence.md`}><Download size={16} /> Export report</a></div><div className="case-hero-metrics"><div><span>REPORTED CAUSE</span><strong>{selected.cause}</strong></div><div><span>LOSS DATE</span><strong>{formatDate(selected.loss_date)}</strong></div><div><span>EVIDENCE SIGNALS</span><strong>{selected.report.evidence_summary.supported} supported <span>/ {selected.report.findings.length} checks</span></strong></div></div></div>
+            {selected && <section className="case-detail"><div className="case-hero"><div className="case-hero-top"><div className="case-breadcrumb">CASE FILE <span>/</span> {selected.claim_id}</div><div className="case-hero-badges">{selected.synthetic_demo && <span className="demo-pill">SYNTHETIC DEMO</span>}<CasePill status={selected.status} /></div></div><div className="case-title-row"><div><h2>{selected.farm}</h2><p><MapPin size={15} />{selected.location} <span className="meta-separator">·</span> {selected.acreage || '—'} acres <span className="meta-separator">·</span> {selected.crop}</p></div><a className="button outline export-button" href={selected.report_saved ? `/api/cases/${encodeURIComponent(selected.id)}/report.md` : undefined} download={`${selected.id}-evidence.md`}><Download size={16} /> {selected.report_saved ? "Export report" : "Report not saved"}</a></div><div className="case-hero-metrics"><div><span>REPORTED CAUSE</span><strong>{selected.cause}</strong></div><div><span>LOSS DATE</span><strong>{formatDate(selected.loss_date)}</strong></div><div><span>EVIDENCE SIGNALS</span><strong>{selected.report.evidence_summary.supported} supported <span>/ {selected.report.findings.length} checks</span></strong></div></div></div>
 
               <div className="tabs">{['Overview', 'Evidence', 'Report'].map(tab => <button key={tab} className={activeTab === tab ? 'active' : ''} onClick={() => setActiveTab(tab)}>{tab}{tab === 'Evidence' && <span>{selected.report.findings.length}</span>}</button>)}</div>
 
-              {activeTab === 'Overview' && <div className="detail-body"><div className="visual-grid"><div className="panel map-panel"><div className="panel-heading"><div><div className="eyebrow">GEOSPATIAL CONTEXT</div><h3>Field footprint</h3></div><span className="panel-corner"><MapPin size={14} /> WGS84</span></div><FieldMap boundary={selected.boundary} selectedField={selected.selected_field} /><div className="panel-note"><span><span className="legend-dot claimed" /> Claimed field</span><span><span className="legend-dot comparison" /> Comparison fields</span></div></div><div className="panel weather-panel"><div className="panel-heading"><div><div className="eyebrow">WEATHER HISTORY</div><h3>Precipitation</h3></div><CloudRain size={19} className="muted-icon" /></div><div className="weather-highlight"><strong>{selected.report.findings.find(f => f.check === 'Precipitation')?.values?.rainfall_mm ?? '—'} <small>mm</small></strong><span>30-day total before reported loss</span></div><RainChart data={selected.weather_series} /></div></div><div className="visual-grid bottom"><div className="panel vegetation-panel"><div className="panel-heading"><div><div className="eyebrow">SATELLITE VEGETATION</div><h3>Field health over time</h3></div><span className="chart-unit">NDVI</span></div><NdviChart data={selected.ndvi_series} lossDate={selected.loss_date} /><div className="chart-bottom-note"><span><i /> Vegetation index</span><span>Before and after imagery comparison</span></div></div><div className="panel workflow-panel"><div className="panel-heading"><div><div className="eyebrow">EVIDENCE WORKFLOW</div><h3>Investigation trail</h3></div><Sparkles size={18} className="muted-icon" /></div><div className="workflow-list">{selected.workflow.map((step, index) => <div className="workflow-step" key={index}><div className="step-marker"><Check size={12} /></div><div><strong>{step.stage}</strong><p>{step.detail}</p></div></div>)}</div></div></div><div className="review-note"><ShieldCheck size={18} /><span>This package is evidence for an adjuster. No claim approval, denial, or coverage decision is made.</span></div></div>}
+              <div className="review-note"><div><strong>{selected.status}</strong><p>{selected.report_saved ? 'Final evidence report saved.' : 'Investigation in progress ? findings below are a working preview.'}</p>{selected.origin === 'demo' && <><p>Synthetic DeWitt data ? scripted deterministic demo ? no autonomous AI inference.</p><button className="button secondary" onClick={runDemo} disabled={runningDemo || selected.status === 'READY_FOR_ADJUSTER_REVIEW'}>{runningDemo ? 'Inspecting evidence?' : 'Run deterministic demo checks'}</button><button className="button ghost" onClick={() => loadDemo(true)} disabled={runningDemo}>New demo run</button></>}{actionError && <p className="inline-error">{actionError}</p>}{selected.asset_error && <p className="inline-error">{selected.asset_error}</p>}</div></div>
+              {(selected.tasks || []).map(task => <div className="review-note" key={task._id}><div><strong>{task.status}: {task.title}</strong><p>{task.reason}</p>{task.status === 'OPEN' ? <form onSubmit={event => { event.preventDefault(); resolveTask(task._id, new FormData(event.currentTarget).get('resolution')) }}><input name="resolution" placeholder="Human resolution note" required /><button className="button secondary" type="submit">Resolve follow-up</button></form> : <p>{task.resolution}</p>}</div></div>)}
+              <details className="review-note"><summary>Audit details and status transitions</summary><pre style={{whiteSpace:'pre-wrap', overflowWrap:'anywhere'}}>{JSON.stringify({ actions: selected.actions, transitions: selected.transitions }, null, 2)}</pre></details>
+
+              {activeTab === 'Overview' && <div className="detail-body"><div className="visual-grid"><div className="panel map-panel"><div className="panel-heading"><div><div className="eyebrow">GEOSPATIAL CONTEXT</div><h3>Field footprint</h3></div><span className="panel-corner"><MapPin size={14} /> WGS84</span></div><FieldMap boundary={selected.boundary} selectedField={selected.selected_field} /><div className="panel-note"><span><span className="legend-dot claimed" /> Claimed field</span><span><span className="legend-dot comparison" /> Comparison fields</span></div></div><div className="panel weather-panel"><div className="panel-heading"><div><div className="eyebrow">WEATHER HISTORY</div><h3>Precipitation</h3></div><CloudRain size={19} className="muted-icon" /></div><div className="weather-highlight"><strong>{selected.report.findings.find(f => f.check === 'Precipitation')?.values?.rainfall_mm ?? '—'} <small>mm</small></strong><span>30-day total before reported loss</span></div><RainChart data={selected.weather_series} /></div></div><div className="visual-grid bottom"><div className="panel vegetation-panel"><div className="panel-heading"><div><div className="eyebrow">SATELLITE VEGETATION</div><h3>Field health over time</h3></div><span className="chart-unit">NDVI</span></div><NdviChart data={selected.ndvi_series} lossDate={selected.loss_date} /><div className="chart-bottom-note"><span><i /> Vegetation index</span><span>Before and after imagery comparison</span></div></div><div className="panel workflow-panel"><div className="panel-heading"><div><div className="eyebrow">EVIDENCE WORKFLOW</div><h3>Investigation trail</h3></div><Sparkles size={18} className="muted-icon" /></div><div className="workflow-list">{selected.workflow.map((step, index) => <div className="workflow-step" key={index}><div className="step-marker">{step.state === "error" ? <X size={12} /> : <Check size={12} />}</div><div><strong>{step.stage}</strong><p>{step.detail}</p></div></div>)}</div></div></div><div className="review-note"><ShieldCheck size={18} /><span>This package is evidence for an adjuster. No claim approval, denial, or coverage decision is made.</span></div></div>}
 
               {activeTab === 'Evidence' && <div className="detail-body"><div className="evidence-intro"><div><div className="eyebrow">STRUCTURED FINDINGS</div><h3>Evidence, with provenance</h3><p>Each finding links a measured signal to its source. Missing or incomplete data stays visible.</p></div><span className="evidence-count">{selected.report.findings.length} CHECKS</span></div><div className="evidence-grid">{selected.report.findings.map((finding, index) => <EvidenceCard key={`${finding.check}-${index}`} finding={finding} />)}</div><div className="source-panel"><div className="source-title"><FileText size={18} /><strong>Source files</strong><span>{selected.documents.length} items</span></div><div className="source-items">{selected.documents.map((name, index) => <div key={`${name}-${index}`}><FileText size={15} /><span>{name}</span>{selected.synthetic_demo && <em>SYNTHETIC</em>}</div>)}</div></div></div>}
 
-              {activeTab === 'Report' && <div className="detail-body"><div className="report-sheet"><div className="report-sheet-top"><div className="report-brand"><Leaf size={20} /> fieldnote.</div><span>FORENSIC EVIDENCE PACKAGE</span></div><div className="report-kicker">CLAIM {selected.id} · {formatDate(selected.created_at)}</div><h2>{selected.farm}</h2><p className="report-subtitle">{selected.crop} · {selected.cause} reported {formatDate(selected.loss_date)} · {selected.location}</p>{selected.synthetic_demo && <div className="report-demo">Synthetic demonstration data — no real NOAA, USDA, or satellite observations</div>}<h3>Evidence summary</h3><div className="report-summary-row">{Object.entries(selected.report.evidence_summary).map(([key, value]) => <div key={key}><strong>{value}</strong><span>{key}</span></div>)}</div><div className="report-findings">{selected.report.findings.map((finding, index) => <div key={index}><div className="report-finding-title"><span>{String(index + 1).padStart(2, '0')}</span><strong>{finding.check}</strong><StatusPill status={finding.status} /></div><p>{finding.detail}</p><small>Source: {finding.source}</small></div>)}</div><h3>Local AI narrative</h3>{selected.narrative ? <p className="ai-narrative">{selected.narrative}</p> : <div className="narrative-empty"><Sparkles size={22} /><div><strong>Ready for a Qwen draft</strong><p>Qwen can turn the measured findings into an adjuster-facing summary through OpenShell's local inference route.</p></div></div>}<button className="button secondary draft-button" onClick={draftNarrative} disabled={drafting}><Sparkles size={16} />{drafting ? 'Drafting locally…' : selected.narrative ? 'Regenerate with Qwen' : 'Draft with local Qwen'}</button>{modelStatus === 'offline' && modelMessage && <p className="inline-error">{modelMessage}</p>}<div className="report-disclaimer"><ShieldCheck size={17} /><p>{selected.report.assessment} {selected.report.method}</p></div></div></div>}
+              {activeTab === 'Report' && <div className="detail-body"><div className="report-sheet"><div className="report-sheet-top"><div className="report-brand"><Leaf size={20} /> fieldnote.</div><span>FORENSIC EVIDENCE PACKAGE</span></div><div className="report-kicker">CLAIM {selected.claim_id} · {formatDate(selected.created_at)}</div><h2>{selected.farm}</h2><p className="report-subtitle">{selected.crop} · {selected.cause} reported {formatDate(selected.loss_date)} · {selected.location}</p>{selected.synthetic_demo && <div className="report-demo">Synthetic demonstration data — no real NOAA, USDA, or satellite observations</div>}<h3>Evidence summary</h3><div className="report-summary-row">{Object.entries(selected.report.evidence_summary).map(([key, value]) => <div key={key}><strong>{value}</strong><span>{key}</span></div>)}</div><div className="report-findings">{selected.report.findings.map((finding, index) => <div key={index}><div className="report-finding-title"><span>{String(index + 1).padStart(2, '0')}</span><strong>{finding.check}</strong><StatusPill status={finding.status} /></div><p>{finding.detail}</p><small>Source: {finding.source}</small></div>)}</div><h3>Human review</h3><p>AI does the detective work; the human adjuster makes the decision. Local agent runtime integration is pending. This report contains deterministic evidence, not a coverage decision.</p><div className="report-disclaimer"><ShieldCheck size={17} /><p>{selected.report.assessment} {selected.report.method}</p></div></div></div>}
             </section>}
           </div>
         </>}
