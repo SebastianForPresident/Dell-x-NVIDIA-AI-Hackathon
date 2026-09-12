@@ -40,6 +40,28 @@ function caseStatus(status) {
     READY_FOR_ADJUSTER_REVIEW: 'Evidence ready' })[status] || status
 }
 
+const workflowLabels = {
+  get_claim: 'Claim loaded',
+  check_crop_classification: 'Crop classification checked',
+  check_rainfall: 'Rainfall evidence checked',
+  check_vegetation_change: 'Vegetation change measured',
+  compare_neighboring_fields: 'Neighboring fields compared',
+  save_investigation_report: 'Investigation report saved',
+  create_follow_up_task: 'Follow-up requested',
+  set_case_status: 'Case status updated',
+  openclaw_run: 'Local agent completed',
+}
+
+function workflowLabel(name) {
+  return workflowLabels[name] || name.replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase())
+}
+
+function isRegressionCase(item) {
+  if (item.origin === 'demo' || item.synthetic_demo) return true
+  const identity = [item.claim_id, item.farm, item.claim_description].filter(Boolean).join(' ')
+  return /(browser[ -]?verification|missing evidence browser|final regression|\bregression\b|\bqa\b|\btest\b|\bsmoke\b|\brehearsal\b)/i.test(identity)
+}
+
 function FieldMap({ boundary, selectedField = 0 }) {
   const features = boundary?.features || []
   const rings = features.flatMap((feature, index) => {
@@ -221,7 +243,7 @@ export default function App() {
   const [error, setError] = useState('')
   const [uploadOpen, setUploadOpen] = useState(false)
   const [claimOpen, setClaimOpen] = useState(false)
-  const [showExamples, setShowExamples] = useState(false)
+  const [showTestHistory, setShowTestHistory] = useState(false)
   const [investigating, setInvestigating] = useState(false)
   const [actionError, setActionError] = useState('')
   const [reportOpen, setReportOpen] = useState(false)
@@ -240,10 +262,13 @@ export default function App() {
     return () => { live = false; clearInterval(timer) }
   }, [])
 
-  const visibleCases = cases.filter(item => showExamples || item.origin !== 'demo')
+  const sortedCases = [...cases].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+  const defaultCases = sortedCases.filter(item => !isRegressionCase(item)).slice(0, 5)
+  const regressionCases = sortedCases.filter(isRegressionCase)
+  const visibleCases = showTestHistory ? [...defaultCases, ...regressionCases] : defaultCases
   const selected = cases.find(item => item.id === selectedId) || visibleCases[0]
-  const readyCount = visibleCases.filter(item => item.status === 'READY_FOR_ADJUSTER_REVIEW').length
-  const reviewCount = visibleCases.filter(item => item.status === 'NEEDS_EVIDENCE').length
+  const readyCount = defaultCases.filter(item => item.status === 'READY_FOR_ADJUSTER_REVIEW').length
+  const reviewCount = defaultCases.filter(item => item.status === 'NEEDS_EVIDENCE').length
   const demoCase = visibleCases[0]
 
   function navigate(next) { setPage(next); setMenuOpen(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }
@@ -283,8 +308,8 @@ export default function App() {
 
     {page !== 'home' && <main className="app-page">{loading ? <div className="page-state">Loading local cases…</div> : error ? <div className="page-state error"><Database size={30} /><h2>Backend unavailable</h2><p>{error}</p><p>Start MongoDB and FastAPI, then refresh.</p></div> : page === 'dashboard' ? <>
       <div className="page-intro"><div><span className="eyebrow">LOCAL CLAIM WORKSPACE</span><h1>Investigation dashboard</h1><p>Saved cases and evidence packages from the local MongoDB.</p></div><button className="button primary" onClick={() => setClaimOpen(true)}><Plus size={18} /> New claim</button></div>
-      <div className="metric-grid"><div><span>Local cases</span><strong>{visibleCases.length}</strong><small>Stored in this workspace</small></div><div><span>Evidence ready</span><strong>{readyCount}</strong><small>For adjuster review</small></div><div><span>Need review</span><strong>{reviewCount}</strong><small>Incomplete or inconclusive</small></div></div>
-      <div className="dashboard-grid"><section className="surface"><div className="surface-heading"><div><span className="eyebrow">CLAIM QUEUE</span><h2>Open a case</h2></div><span className="count-tag">{visibleCases.length} claims</span></div><label className="check-label"><input type="checkbox" checked={showExamples} onChange={event => setShowExamples(event.target.checked)} /> Show synthetic example history ({cases.filter(item => item.origin === 'demo').length})</label><div className="claim-list">{!visibleCases.length && <div className="empty-claims"><h3>Your claims start here</h3><p>Create a claim in your own words. Evidence for the DeWitt demonstration field is already on this machine.</p><button className="button primary" onClick={() => setClaimOpen(true)}>New claim</button></div>}{visibleCases.map(item => <button className="claim-row" key={item.id} onClick={() => openCase(item)}><div className="row-main"><span className="claim-id">{item.claim_id || item.id} {item.synthetic_demo && <small>SYNTHETIC</small>}</span><strong>{item.farm}</strong><span>{item.cause} · {item.crop} · {item.location}</span></div><div className="row-end"><span className={`case-status ${item.status === 'READY_FOR_ADJUSTER_REVIEW' ? 'ready' : 'review'}`}>{caseStatus(item.status)}</span><ChevronRight size={19} /></div></button>)}</div></section><aside className="dashboard-side"><section className="surface"><span className="eyebrow">SAVED WORKFLOW</span><h2>{demoCase?.claim_id || 'No claim selected'}</h2><p className="muted">The agent’s completed actions appear here after you start an investigation.</p><div className="activity-list">{(demoCase?.workflow || []).map((item, index) => <div key={index}><span className="activity-mark"><Check size={13} /></span><span><strong>{item.stage}</strong><small>{item.detail}</small></span></div>)}</div><button className="text-link" onClick={() => demoCase && openCase(demoCase)}>View investigation <ArrowRight size={16} /></button></section><section className="surface sources-card"><span className="eyebrow">LOCAL EVIDENCE SOURCES</span>{['Weather records', 'Crop classification', 'Satellite vegetation', 'Neighbor fields'].map(source => <div key={source}><CheckCircle2 size={17} /> {source}</div>)}<small>Demo data is synthetic and clearly labeled.</small></section></aside></div>
+      <div className="metric-grid"><div><span>Active claims</span><strong>{defaultCases.length}</strong><small>In the working queue</small></div><div><span>Evidence ready</span><strong>{readyCount}</strong><small>For adjuster review</small></div><div><span>Need review</span><strong>{reviewCount}</strong><small>Incomplete or inconclusive</small></div></div>
+      <div className="dashboard-grid"><section className="surface"><div className="surface-heading"><div><span className="eyebrow">CLAIM QUEUE</span><h2>Open a case</h2></div><span className="count-tag">{defaultCases.length} active claims</span></div><label className="check-label history-toggle"><input type="checkbox" checked={showTestHistory} onChange={event => setShowTestHistory(event.target.checked)} /> Show test / regression history ({regressionCases.length})</label><div className="claim-list">{!visibleCases.length && <div className="empty-claims"><h3>Your claims start here</h3><p>Create a claim in your own words. Evidence for the DeWitt analysis area is already on this machine.</p><button className="button primary" onClick={() => setClaimOpen(true)}>New claim</button></div>}{visibleCases.map(item => <button className={`claim-row ${isRegressionCase(item) ? 'regression-row' : ''}`} key={item.id} onClick={() => openCase(item)}><div className="row-main"><span className="claim-id">{item.claim_id || item.id} {item.synthetic_demo && <small>SYNTHETIC</small>}{isRegressionCase(item) && <small>TEST HISTORY</small>}</span><strong>{item.farm}</strong><span>{item.cause} · {item.crop} · {item.location}</span></div><div className="row-end"><span className={`case-status ${item.status === 'READY_FOR_ADJUSTER_REVIEW' ? 'ready' : 'review'}`}>{caseStatus(item.status)}</span><ChevronRight size={19} /></div></button>)}</div></section><aside className="dashboard-side"><section className="surface"><span className="eyebrow">RECENT WORKFLOW</span><h2>{demoCase?.claim_id || 'No claim selected'}</h2><p className="muted">Completed investigation milestones for the newest visible claim.</p><div className="activity-list">{(demoCase?.workflow || []).map((item, index) => <div key={index}><span className="activity-mark"><Check size={13} /></span><span><strong>{workflowLabel(item.stage)}</strong><small>{item.state === 'error' ? 'Needs technical review' : 'Completed'}</small></span></div>)}</div><button className="text-link" onClick={() => demoCase && openCase(demoCase)}>View investigation <ArrowRight size={16} /></button></section><section className="surface sources-card"><span className="eyebrow">LOCAL EVIDENCE SOURCES</span>{['Weather records', 'Crop classification', 'Satellite vegetation', 'Neighbor fields'].map(source => <div key={source}><CheckCircle2 size={17} /> {source}</div>)}<small>Public evidence and synthetic fixtures are labeled in each case.</small></section></aside></div>
     </> : selected ? <>
       <div className="claim-topline"><button className="text-link" onClick={() => navigate('dashboard')}>← Dashboard</button><span>{selected.synthetic_demo ? 'SYNTHETIC DEMO DATA' : 'LOCAL CASE FILE'}</span></div>
       <div className="page-intro claim-intro"><div><span className="eyebrow">CLAIM INVESTIGATION · {selected.claim_id || selected.id}</span><h1>{selected.farm}</h1><p>{selected.cause} · {selected.crop} · {selected.location}</p></div><span className={`case-status large ${selected.status === 'READY_FOR_ADJUSTER_REVIEW' ? 'ready' : 'review'}`}>{caseStatus(selected.status)}</span></div>
@@ -295,14 +320,14 @@ export default function App() {
           <p>The local agent chooses crop, rainfall, vegetation, and neighbor checks, then prepares the evidence report for human review. {selected.synthetic_demo ? 'This regression fixture uses synthetic assets.' : 'Measurements come from the registered local evidence package.'}</p>
           <div className="progress-list">
             <div className="progress-item done"><span><Check size={16} /></span><div><strong>Claim and field loaded</strong><small>{selected.claim_id || selected.id} · {selected.crop} · {selected.cause}</small></div></div>
-            {selected.workflow.map((step, index) => <div className={`progress-item ${step.state === 'error' ? 'failed' : 'done'}`} key={`${step.stage}-${index}`}><span>{step.state === 'error' ? <X size={16} /> : <Check size={16} />}</span><div><strong>{step.stage.replaceAll('_', ' ')}</strong><small>{step.detail}</small></div></div>)}
+            {selected.workflow.map((step, index) => <div className={`progress-item ${step.state === 'error' ? 'failed' : 'done'}`} key={`${step.stage}-${index}`}><span>{step.state === 'error' ? <X size={16} /> : <Check size={16} />}</span><div><strong>{workflowLabel(step.stage)}</strong><small>{step.state === 'error' ? 'Needs technical review' : 'Completed'}</small></div></div>)}
             {!selected.report_saved && <div className={`progress-item ${investigating ? 'active' : ''}`}><span><Activity size={16} /></span><div><strong>Complete measured checks</strong><small>{investigating ? 'Running the next local evidence check…' : 'Ready to run the demo investigation'}</small></div></div>}
           </div>
           {<button className="button primary run-button" onClick={runInvestigation} disabled={investigating}><Activity size={18} /> {investigating ? 'Running investigation…' : selected.report_saved ? (selected.origin === 'demo' ? 'Run fresh investigation' : 'Investigate again') : 'Run investigation'}</button>}
           {actionError && <p className="error-message">{actionError}</p>}
         </div>
           <section className="surface evidence-section"><div className="surface-heading"><div><span className="eyebrow">SOURCE-BACKED FINDINGS</span><h2>Evidence summary</h2></div><span className="count-tag">{selected.report.findings.length} checks</span></div><div className="evidence-grid">{evidenceOrder.map(({ check, label, key, icon: Icon }) => { const finding = selected.report.findings.find(item => item.check === check); if (!finding) return null; return <div className="evidence-card" key={key}><div className="evidence-card-top"><span className="evidence-icon"><Icon size={20} /></span><span className={`finding-status ${finding.status}`}>{statusLabel(finding.status)}</span></div><h3>{label}</h3><p>{finding.detail}</p><small>Source: {finding.source}</small>{finding.provenance?.datasets?.map((dataset, index) => <div className="provenance-line" key={`${dataset.product}-${index}`}><strong>{dataset.provider}</strong><span>{dataset.product}{dataset.station_id ? ` · ${dataset.station_id}` : ''}{dataset.item_id ? ` · ${dataset.item_id}` : ''}{dataset.date ? ` · ${dataset.date}` : ''}</span></div>)}</div> })}</div></section>
-          <section className="surface assessment"><span className="eyebrow">FORENSIC EVIDENCE SUMMARY</span><h2>{selected.report.evidence_summary.supported} of {selected.report.findings.length} checks supported</h2><p>{selected.report.assessment}</p><div className="assessment-note"><ShieldCheck size={18} /> FieldTrace does not approve or deny claims. A qualified adjuster reviews this evidence.</div><div className="report-actions"><button className="button secondary" onClick={() => setReportOpen(!reportOpen)}><FileText size={17} /> {reportOpen ? 'Hide report' : 'View report'}</button>{selected.report_saved && <a className="button secondary" href={`/api/cases/${encodeURIComponent(selected.id)}/report.md`} download={`${selected.id}-evidence.md`}><Download size={17} /> Download Markdown</a>}</div>{reportOpen && <div className="report-details"><h3>Measured findings</h3>{selected.report.findings.map(finding => <div key={finding.check}><strong>{finding.check} · {statusLabel(finding.status)}</strong><p>{finding.detail}</p><small>{finding.source}</small></div>)}<h3>Agent response</h3><p>{selected.agent_run?.summary || 'No completed agent run saved yet.'}</p><h3>Action audit</h3><pre>{JSON.stringify(selected.actions, null, 2)}</pre><h3>Method</h3><p>{selected.report.method}</p></div>}</section>
+          <section className="surface assessment"><span className="eyebrow">FORENSIC EVIDENCE SUMMARY</span><h2>{selected.report.evidence_summary.supported} of {selected.report.findings.length} checks supported</h2><p>{selected.report.assessment}</p><div className="assessment-note"><ShieldCheck size={18} /> FieldTrace does not approve or deny claims. A qualified adjuster reviews this evidence.</div><div className="report-actions"><button className="button secondary" onClick={() => setReportOpen(!reportOpen)}><FileText size={17} /> {reportOpen ? 'Hide report' : 'View report'}</button>{selected.report_saved && <a className="button secondary" href={`/api/cases/${encodeURIComponent(selected.id)}/report.md`} download={`${selected.id}-evidence.md`}><Download size={17} /> Download Markdown</a>}</div>{reportOpen && <div className="report-details"><h3>Measured findings</h3>{selected.report.findings.map(finding => <div key={finding.check}><strong>{finding.check} · {statusLabel(finding.status)}</strong><p>{finding.detail}</p><small>{finding.source}</small></div>)}<h3>Agent response</h3><p>{selected.agent_run?.summary || 'No completed agent run saved yet.'}</p><h3>Method</h3><p>{selected.report.method}</p><details className="technical-audit"><summary>Technical audit</summary><pre>{JSON.stringify(selected.actions, null, 2)}</pre></details></div>}</section>
         </section></div>
     </> : <div className="page-state">No claim selected. Create a new claim from the dashboard to begin.</div>}</main>}
     <footer className="site-footer"><span>FieldTrace · Crop insurance evidence assistant</span><span>Local data · Human review · OpenClaw · Ollama · gpt-oss:20b</span></footer>
