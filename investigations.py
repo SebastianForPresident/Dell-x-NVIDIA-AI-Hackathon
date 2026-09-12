@@ -46,6 +46,19 @@ class InvestigationService:
             "report_id": report_id, "persistence_complete": True, "updated_at": utcnow()}})
         return {"report_id": report_id, "report": report}
 
+    def save_ai_review(self, investigation_id, review):
+        """Attach local model wording to a completed evidence package."""
+        package = self.load_package(investigation_id)
+        if package["report"] is None:
+            raise ValueError("Save the measured evidence report before requesting a model review.")
+        keys = ("weather", "vegetation", "crop", "neighbors", "overall")
+        if not isinstance(review, dict) or any(not isinstance(review.get(key), str) or not review[key].strip() for key in keys):
+            raise ValueError("Model review must contain all five evidence summaries.")
+        self.store.db.investigations.update_one({"_id": investigation_id},
+            {"$set": {"ai_review": {key: review[key].strip() for key in keys}, "updated_at": utcnow()}})
+        self.record_action(investigation_id, stable_id("qwen_review", review), "local_qwen_review",
+                           {"source": "stored_structured_evidence"}, {"ok": True}, actor="model")
+
     def _investigation(self, investigation_id):
         record = self.store.get("investigations", investigation_id)
         if record is None:

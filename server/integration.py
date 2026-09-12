@@ -92,7 +92,7 @@ def project(service, investigation_id):
             "synthetic_demo": meta.get("synthetic_demo", False), "origin": meta.get("origin", "historical"),
             "boundary": boundary, "selected_field": record["context"].get("agent_asset_manifest", {}).get("selected_field", 0),
             "weather_series": weather, "ndvi_series": ndvi, "report": preview,
-            "report_saved": report is not None, "documents": documents, "narrative": None,
+            "report_saved": report is not None, "documents": documents, "ai_review": record.get("ai_review"),
             "workflow": workflow, "actions": actions, "tasks": package["tasks"],
             "transitions": record["transitions"], "evidence": package["evidence"], "asset_error": asset_error}
 

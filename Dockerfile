@@ -9,7 +9,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-COPY forensics.py persistence.py investigations.py agent_assets.py agent_tools.py ./
+COPY forensics.py persistence.py investigations.py agent_assets.py agent_tools.py local_narrative.py ./
 COPY server/ ./server/
 COPY --from=web /web/dist ./static/
 ENV STATIC_DIR=/app/static

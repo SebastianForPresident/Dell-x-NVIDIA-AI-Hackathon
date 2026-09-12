@@ -1,4 +1,4 @@
-"""React API backed exclusively by InvestigationService; no model inference."""
+"""React API backed by InvestigationService, with optional local Qwen review."""
 
 from datetime import date
 import os
@@ -11,57 +11,39 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo.errors import PyMongoError
 
-from forensics import (
-    Finding, build_report, crop_finding, field_names, load_boundary, markdown_report,
-    ndvi_mean, neighbors_finding, parse_weather, vegetation_finding, weather_finding,
-)
-from local_narrative import analyze_structured_case, check_local_model, extract_claim_fields, write_narrative
-from server.database import case_document, cases, client, initialize_database
+from agent_assets import CaseAssets
+from agent_tools import AgentTools
+from forensics import field_names, markdown_report
+from local_narrative import analyze_structured_case
+from server.database import get_service
+from server.integration import asset_root, demo, demo_step, project
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    initialize_database()
-    yield
-    client.close()
+app = FastAPI(title="Crop Insurance Forensics")
 
 
-app = FastAPI(title="Crop Insurance Forensics", lifespan=lifespan)
+@app.exception_handler(PyMongoError)
+async def database_error(request, exc):
+    return JSONResponse(status_code=503, content={"detail": "MongoDB unavailable; check canonical MONGODB configuration."})
 
 
-def _get_case(case_id: str) -> dict:
-    doc = case_document(case_id)
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-    return doc
+@app.exception_handler(ValueError)
+async def input_error(request, exc):
+    return JSONResponse(status_code=422, content={"detail": str(exc).replace(str(asset_root()), "<case-assets>")})
 
 
-async def _read_small(upload: UploadFile | None, limit: int = 8_000_000) -> bytes | None:
-    if upload is None:
-        return None
-    content = await upload.read(limit + 1)
-    if len(content) > limit:
-        raise HTTPException(status_code=413, detail=f"{upload.filename} exceeds the {limit // 1_000_000} MB limit")
-    return content
-
-
-async def _save_raster(upload: UploadFile | None, folder: Path, name: str) -> tuple[Path | None, str | None]:
-    if upload is None:
-        return None, None
-    path = folder / name
-    digest = hashlib.sha256()
-    with path.open("wb") as output:
-        while chunk := await upload.read(4 * 1024 * 1024):
-            digest.update(chunk)
-            output.write(chunk)
-    return path, digest.hexdigest()
+def require_case(service, case_id):
+    try:
+        return service.load_package(case_id)
+    except ValueError as exc:
+        raise HTTPException(404, "Investigation not found") from exc
 
 
 @app.get("/api/health")
 def health(service=Depends(get_service)):
     return {"status": "ok", "database": "MongoDB via InvestigationService",
             "case_count": len(service.list_investigations()), "model_checked": False,
-            "runtime": "OpenClaw integration pending; no inference enabled"}
+            "runtime": "Deterministic evidence tools; optional OpenShell/Qwen review"}
 
 
 @app.get("/api/cases")
@@ -96,58 +78,73 @@ def run_demo_step(case_id: str, service=Depends(get_service)):
 
 
 @app.get("/api/cases/{case_id}/report.md")
-def get_markdown_report(case_id: str):
-    doc = _get_case(case_id)
-    report = markdown_report(doc["report"])
-    if doc.get("ai_review"):
-        report += "\n## Local Qwen interpretation — adjuster review required\n\n"
+def get_markdown_report(case_id: str, service=Depends(get_service)):
+    package = require_case(service, case_id)
+    if package["report"] is None:
+        raise HTTPException(409, "A final report has not been saved yet")
+    content = markdown_report(package["report"])
+    review = package["investigation"].get("ai_review")
+    if review:
+        content += "\n## Local Qwen interpretation — adjuster review required\n\n"
         for key, label in (("weather", "Weather"), ("vegetation", "Vegetation"),
                            ("crop", "Crop"), ("neighbors", "Neighbor fields"),
                            ("overall", "Overall evidence")):
-            report += f"### {label}\n\n{doc['ai_review'][key]}\n\n"
-    return PlainTextResponse(report, media_type="text/markdown")
-
-
-@app.post("/api/runtime/check-model")
-def check_model():
-    try:
-        response = check_local_model()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"OpenShell/Qwen inference unavailable: {exc}") from exc
-    return {"status": "ok", "route": "https://inference.local", "response": response}
-
-
-@app.post("/api/cases/{case_id}/narrative")
-def draft_narrative(case_id: str):
-    doc = _get_case(case_id)
-    try:
-        narrative = write_narrative(doc["report"])
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"OpenShell/Qwen inference unavailable: {exc}") from exc
-    cases.update_one({"id": case_id}, {"$set": {"narrative": narrative}})
-    return {"narrative": narrative}
+            content += f"### {label}\n\n{review[key]}\n\n"
+    return PlainTextResponse(content, media_type="text/markdown")
 
 
 @app.post("/api/cases/{case_id}/ai-review")
-def review_case_with_qwen(case_id: str):
-    doc = _get_case(case_id)
+def review_case_with_qwen(case_id: str, service=Depends(get_service)):
+    package = require_case(service, case_id)
+    if package["report"] is None:
+        raise HTTPException(409, "Save the measured evidence report before requesting a model review")
     try:
-        review = analyze_structured_case(doc)
+        review = analyze_structured_case(project(service, case_id))
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"OpenShell/Qwen review unavailable: {exc}") from exc
-    cases.update_one({"id": case_id}, {"$set": {"ai_review": review}})
+        raise HTTPException(503, f"OpenShell/Qwen review unavailable: {exc}") from exc
+    service.save_ai_review(case_id, review)
     return {"ai_review": review}
 
 
-@app.post("/api/cases/{case_id}/claim-suggestions")
-def claim_suggestions(case_id: str):
-    doc = _get_case(case_id)
-    if not doc.get("claim_text"):
-        raise HTTPException(status_code=400, detail="This case has no selectable claim PDF text")
-    try:
-        return {"suggestions": extract_claim_fields(doc["claim_text"])}
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"OpenShell/Qwen inference unavailable: {exc}") from exc
+class TaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=1000)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class ResolutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    resolution: str = Field(min_length=1, max_length=1000)
+
+
+@app.post("/api/cases/{case_id}/tasks", status_code=201)
+def create_task(case_id: str, body: TaskRequest, service=Depends(get_service)):
+    require_case(service, case_id)
+    service.create_follow_up_task(case_id, body.title, body.reason, actor="human")
+    return project(service, case_id)
+
+
+@app.post("/api/cases/{case_id}/tasks/{task_id}/resolve")
+def resolve_task(case_id: str, task_id: str, body: ResolutionRequest, service=Depends(get_service)):
+    package = require_case(service, case_id)
+    if not any(task["_id"] == task_id for task in package["tasks"]):
+        raise HTTPException(404, "Follow-up task not found in this investigation")
+    service.resolve_follow_up_task(case_id, task_id, body.resolution)
+    return project(service, case_id)
+
+
+async def save_upload(upload, folder, filename, limit):
+    if upload is None:
+        return None
+    path = folder / filename  # Fixed application filename, never user-provided path.
+    size = 0
+    with path.open("wb") as output:
+        while chunk := await upload.read(1024 * 1024):
+            size += len(chunk)
+            if size > limit:
+                raise HTTPException(413, "Evidence file exceeds upload limit")
+            output.write(chunk)
+    return filename
 
 
 @app.post("/api/cases/analyze", status_code=201)
