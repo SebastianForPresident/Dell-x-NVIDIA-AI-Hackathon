@@ -1,0 +1,414 @@
+{
+  "verified_on": "2026-09-12; actual GB10 aarch64",
+  "first_crop_round_trip": {
+    "run_id": "8a944bcff66d46f6a3488d76b2a8d0a3",
+    "investigation_id": "a1915a6d5dcbb0f071a7dc2a25855f777df43e6e9a573a199c69478947382141",
+    "receipt": {
+      "runId": "d2a429f2-cc95-43a9-aa30-4640508e797b",
+      "sessionId": "8a944bcff66d46f6a3488d76b2a8d0a3",
+      "turnId": "d2a429f2-cc95-43a9-aa30-4640508e797b",
+      "requested": {
+        "provider": "ollama",
+        "model": "gpt-oss:20b"
+      },
+      "effective": {
+        "provider": "ollama",
+        "model": "gpt-oss:20b",
+        "responseModel": "gpt-oss:20b"
+      },
+      "successfulToolNames": [
+        "check_crop_classification"
+      ],
+      "rerouted": false
+    },
+    "correlation": {
+      "tool_call_id": "call_xja00otr",
+      "tool": "check_crop_classification",
+      "action_id": "e9c1e247b6edbfb1ef29f8c73a9eb7ef8241b118442cc50d5a61c90d3e1cc34d",
+      "evidence_id": "06a5fdb7f9a74bd8f25b7a6ea1fee1b2e166bf5b1b4086b9e9803ad0c78f2848"
+    },
+    "evidence": {
+      "_id": "06a5fdb7f9a74bd8f25b7a6ea1fee1b2e166bf5b1b4086b9e9803ad0c78f2848",
+      "created_at": "2026-09-12 17:07:22.132000+00:00",
+      "finding": {
+        "check": "Crop type",
+        "status": "supported",
+        "detail": "Dominant CDL class: Corn (100% of sampled pixels).",
+        "source": "crop.tif",
+        "values": {
+          "cdl_code": 1,
+          "class": "Corn",
+          "share": 1.0,
+          "pixels": 25
+        }
+      },
+      "investigation_id": "a1915a6d5dcbb0f071a7dc2a25855f777df43e6e9a573a199c69478947382141"
+    },
+    "action": {
+      "_id": "e9c1e247b6edbfb1ef29f8c73a9eb7ef8241b118442cc50d5a61c90d3e1cc34d",
+      "actor": "agent",
+      "arguments": {},
+      "created_at": "2026-09-12 17:07:22.134000+00:00",
+      "investigation_id": "a1915a6d5dcbb0f071a7dc2a25855f777df43e6e9a573a199c69478947382141",
+      "result": {
+        "ok": true,
+        "data": {
+          "evidence_id": "06a5fdb7f9a74bd8f25b7a6ea1fee1b2e166bf5b1b4086b9e9803ad0c78f2848",
+          "finding": {
+            "check": "Crop type",
+            "status": "supported",
+            "detail": "Dominant CDL class: Corn (100% of sampled pixels).",
+            "source": "crop.tif",
+            "values": {
+              "cdl_code": 1,
+              "class": "Corn",
+              "share": 1.0,
+              "pixels": 25
+            }
+          }
+        }
+      },
+      "tool": "check_crop_classification"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Investigate this claim.\nClaim context: {\"claim_id\": \"DEWITT-2026-DEMO\", \"reported_cause\": \"Drought\", \"reported_loss_date\": \"2026-07-18\", \"field\": \"Synthetic corn field\", \"claimed_crop\": \"Corn\", \"synthetic_demo\": true, \"farm\": \"DeWitt Demonstration Farm\", \"location\": \"DeWitt County, Illinois\", \"acreage\": 184, \"asset_bundle\": \"dewitt-synthetic-v1\", \"origin\": \"demo\", \"demo_run\": \"0ea7efc511db46a0885db510c1180800\"}",
+        "timestamp": 1789232840434,
+        "__openclaw": {
+          "senderIsOwner": true
+        },
+        "idempotencyKey": "7dc35177-da8c-4709-82b6-99c0368cd30a:user"
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "call_xja00otr",
+            "name": "check_crop_classification",
+            "arguments": {}
+          }
+        ],
+        "stopReason": "toolUse",
+        "api": "ollama",
+        "provider": "ollama",
+        "model": "gpt-oss:20b",
+        "usage": {
+          "input": 2316,
+          "output": 28,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "cacheTelemetry": {
+            "state": "available"
+          },
+          "totalTokens": 2344,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "timestamp": 1789232841993,
+        "turnId": "01a09696-850c-7e92-b090-dd82b47c73ca",
+        "__openclaw": {
+          "runId": "d2a429f2-cc95-43a9-aa30-4640508e797b"
+        }
+      },
+      {
+        "role": "toolResult",
+        "toolCallId": "call_xja00otr",
+        "toolName": "check_crop_classification",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"ok\":true,\"data\":{\"evidence_id\":\"06a5fdb7f9a74bd8f25b7a6ea1fee1b2e166bf5b1b4086b9e9803ad0c78f2848\",\"finding\":{\"check\":\"Crop type\",\"status\":\"supported\",\"detail\":\"Dominant CDL class: Corn (100% of sampled pixels).\",\"source\":\"crop.tif\",\"values\":{\"cdl_code\":1,\"class\":\"Corn\",\"share\":1,\"pixels\":25}}}}"
+          }
+        ],
+        "details": {
+          "ok": true,
+          "data": {
+            "evidence_id": "06a5fdb7f9a74bd8f25b7a6ea1fee1b2e166bf5b1b4086b9e9803ad0c78f2848",
+            "finding": {
+              "check": "Crop type",
+              "status": "supported",
+              "detail": "Dominant CDL class: Corn (100% of sampled pixels).",
+              "source": "crop.tif",
+              "values": {
+                "cdl_code": 1,
+                "class": "Corn",
+                "share": 1,
+                "pixels": 25
+              }
+            }
+          }
+        },
+        "isError": false,
+        "timestamp": 1789232842653,
+        "__openclaw": {
+          "runId": "d2a429f2-cc95-43a9-aa30-4640508e797b"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "The crop\u2011type check shows that the dominant Class of Land (CDL) class within the field is Corn (100\u202f% of sampled pixels). This evidence supports the claim that the field contains the reported crop."
+          }
+        ],
+        "stopReason": "stop",
+        "api": "ollama",
+        "provider": "ollama",
+        "model": "gpt-oss:20b",
+        "usage": {
+          "input": 125,
+          "output": 47,
+          "cacheRead": 2343,
+          "cacheWrite": 0,
+          "cacheTelemetry": {
+            "state": "available"
+          },
+          "totalTokens": 2515,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "timestamp": 1789232843716,
+        "__openclaw": {
+          "runId": "d2a429f2-cc95-43a9-aa30-4640508e797b"
+        }
+      }
+    ]
+  },
+  "browser_full_run": {
+    "run_id": "7131fe725efa45999fcb53cf7435c3fb",
+    "investigation_id": "e3cbaee439497a44ce5b6afeb02811edd0f3595cebaa0fdc50bd075b2a5f6ef7",
+    "mongo_ping": {
+      "ok": 1.0
+    },
+    "mongo_database": "crop_forensics",
+    "receipt": {
+      "runId": "a3b919ab-41cf-45da-b719-72f16221267e",
+      "sessionId": "7131fe725efa45999fcb53cf7435c3fb",
+      "turnId": "a3b919ab-41cf-45da-b719-72f16221267e",
+      "requested": {
+        "provider": "ollama",
+        "model": "gpt-oss:20b"
+      },
+      "effective": {
+        "provider": "ollama",
+        "model": "gpt-oss:20b",
+        "responseModel": "gpt-oss:20b"
+      },
+      "successfulToolNames": [
+        "get_claim",
+        "check_crop_classification",
+        "check_rainfall",
+        "check_vegetation_change",
+        "compare_neighboring_fields",
+        "save_investigation_report",
+        "set_case_status"
+      ],
+      "rerouted": false
+    },
+    "exposed_tools": [
+      "get_claim",
+      "check_crop_classification",
+      "check_rainfall",
+      "check_vegetation_change",
+      "compare_neighboring_fields",
+      "create_follow_up_task",
+      "set_case_status",
+      "save_investigation_report"
+    ],
+    "correlations": [
+      {
+        "tool_call_id": "call_gww2y4wx",
+        "tool": "get_claim",
+        "action_id": "0b19657dd3f1efd2cddddfaeaca1235e640729eeaa062e9ccc69ba1c4136df22",
+        "evidence_id": null
+      },
+      {
+        "tool_call_id": "call_iroofc1l",
+        "tool": "check_crop_classification",
+        "action_id": "96a62f7bd42be4a9b604eb8a1d0187899bb0bf028a348cd95bbd727b0c6f9500",
+        "evidence_id": "c9cc1059e7c7b2fa585b6bbb55cdb1976f816b3b195c90d13b62b5779a18b44b"
+      },
+      {
+        "tool_call_id": "call_7bpw12do",
+        "tool": "check_rainfall",
+        "action_id": "fb57d2150a6106db5d58b0cac564ed8e0d699972af7f141f24dc1fca413e35f6",
+        "evidence_id": "9e2e0c452c8432d76ed38fb14fc30a84dec5bbcf849e4e0dc5b28101a291f99e"
+      },
+      {
+        "tool_call_id": "call_d6k3jbjf",
+        "tool": "check_vegetation_change",
+        "action_id": "6a9fa0a42ed0fe1ecb755a6c100540d10be2d17495bb8eba62b0c526df554934",
+        "evidence_id": "72cdb106fd99403206c8e5c0ed234e50ae99336ae7af181aa99e248979e14284"
+      },
+      {
+        "tool_call_id": "call_7ixub0o2",
+        "tool": "compare_neighboring_fields",
+        "action_id": "ca324202a9e798c458cde5ad60a6921e628469cb9b4fe801b22c852b99160360",
+        "evidence_id": "0b552a89bb9531336959663db92a8f3e7b8d75f307ebcda06d90b5e1947b4468"
+      },
+      {
+        "tool_call_id": "call_jmxpdssr",
+        "tool": "save_investigation_report",
+        "action_id": "e752c92f8a4d1e32dde8acfa1d210f1422ec04bd2794be7b4355ae9bd2ba4ed7",
+        "evidence_id": null
+      },
+      {
+        "tool_call_id": "call_mogc2arq",
+        "tool": "set_case_status",
+        "action_id": "912de7bd7ddea217be86be579378fc551241534b544f22803f8bcd21d2d67a49",
+        "evidence_id": null
+      }
+    ],
+    "runtime_rejections": [
+      {
+        "call": {
+          "type": "toolCall",
+          "id": "call_k80jksmx",
+          "name": "get_claim",
+          "arguments": {
+            "claim_id": "DEWITT-2026-DEMO"
+          }
+        },
+        "result": {
+          "role": "toolResult",
+          "toolCallId": "call_k80jksmx",
+          "toolName": "get_claim",
+          "content": [
+            {
+              "type": "text",
+              "text": "Validation failed for tool \"get_claim\":\n  - root: must not have additional properties\n\nReceived arguments:\n{\n  \"claim_id\": \"DEWITT-2026-DEMO\"\n}"
+            }
+          ],
+          "details": {},
+          "isError": true,
+          "timestamp": 1789233087483,
+          "__openclaw": {
+            "runId": "a3b919ab-41cf-45da-b719-72f16221267e"
+          }
+        }
+      }
+    ],
+    "status": "READY_FOR_ADJUSTER_REVIEW",
+    "transitions": [
+      {
+        "from": null,
+        "to": "NEW",
+        "at": "2026-09-12 17:11:24.238000+00:00",
+        "actor": "application",
+        "reason": "Investigation created"
+      },
+      {
+        "from": "NEW",
+        "to": "INVESTIGATING",
+        "reason": "Evidence investigation began",
+        "actor": "agent",
+        "at": "2026-09-12 17:11:29.471000+00:00"
+      },
+      {
+        "from": "INVESTIGATING",
+        "to": "READY_FOR_ADJUSTER_REVIEW",
+        "reason": "All evidence collected and report saved",
+        "actor": "agent",
+        "at": "2026-09-12 17:11:35.395000+00:00"
+      }
+    ],
+    "evidence": [
+      {
+        "_id": "c9cc1059e7c7b2fa585b6bbb55cdb1976f816b3b195c90d13b62b5779a18b44b",
+        "created_at": "2026-09-12 17:11:29.487000+00:00",
+        "finding": {
+          "check": "Crop type",
+          "status": "supported",
+          "detail": "Dominant CDL class: Corn (100% of sampled pixels).",
+          "source": "crop.tif",
+          "values": {
+            "cdl_code": 1,
+            "class": "Corn",
+            "share": 1.0,
+            "pixels": 25
+          }
+        },
+        "investigation_id": "e3cbaee439497a44ce5b6afeb02811edd0f3595cebaa0fdc50bd075b2a5f6ef7"
+      },
+      {
+        "_id": "9e2e0c452c8432d76ed38fb14fc30a84dec5bbcf849e4e0dc5b28101a291f99e",
+        "created_at": "2026-09-12 17:11:30.550000+00:00",
+        "finding": {
+          "check": "Precipitation",
+          "status": "supported",
+          "detail": "Rainfall was 30.0 mm versus 90.0 mm normal (33% of normal).",
+          "source": "weather.csv",
+          "values": {
+            "window_start": "2026-06-19",
+            "window_end": "2026-07-18",
+            "days_observed": 30,
+            "days_expected": 30,
+            "rainfall_mm": 30.0,
+            "normal_mm": 90.0,
+            "percent_of_normal": 33.3
+          }
+        },
+        "investigation_id": "e3cbaee439497a44ce5b6afeb02811edd0f3595cebaa0fdc50bd075b2a5f6ef7"
+      },
+      {
+        "_id": "72cdb106fd99403206c8e5c0ed234e50ae99336ae7af181aa99e248979e14284",
+        "created_at": "2026-09-12 17:11:31.666000+00:00",
+        "finding": {
+          "check": "Vegetation change",
+          "status": "supported",
+          "detail": "Mean NDVI fell from 0.750 to 0.429 (-0.321) across the claim date.",
+          "source": "before.tif; after.tif",
+          "values": {
+            "before_ndvi": 0.75,
+            "after_ndvi": 0.429,
+            "change": -0.321,
+            "before_date": "2026-05-30",
+            "after_date": "2026-08-12"
+          }
+        },
+        "investigation_id": "e3cbaee439497a44ce5b6afeb02811edd0f3595cebaa0fdc50bd075b2a5f6ef7"
+      },
+      {
+        "_id": "0b552a89bb9531336959663db92a8f3e7b8d75f307ebcda06d90b5e1947b4468",
+        "created_at": "2026-09-12 17:11:32.765000+00:00",
+        "finding": {
+          "check": "Other supplied fields",
+          "status": "supported",
+          "detail": "1/1 other supplied fields had NDVI declines \u2264\u22120.12.",
+          "source": "before.tif; after.tif",
+          "values": {
+            "fields_checked": 1,
+            "fields_with_decline": 1,
+            "changes": [
+              -0.321
+            ]
+          }
+        },
+        "investigation_id": "e3cbaee439497a44ce5b6afeb02811edd0f3595cebaa0fdc50bd075b2a5f6ef7"
+      }
+    ],
+    "report_id": "f9b3124d49feb020a7aeec8214486b760a817e0c947b73fe1ac39988754b47a1",
+    "report_saved": true,
+    "browser_errors": [],
+    "visible_checks": 4,
+    "mongo_counts": {
+      "investigations": 1,
+      "evidence": 4,
+      "agent_actions": 8,
+      "reports": 1
+    }
+  }
+}

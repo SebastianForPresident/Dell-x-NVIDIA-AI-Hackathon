@@ -1,4 +1,4 @@
-"""React API backed by InvestigationService, with optional local Qwen review."""
+"""React API backed by InvestigationService and local OpenClaw/Ollama."""
 
 from datetime import date
 import os
@@ -14,7 +14,7 @@ from pymongo.errors import PyMongoError
 from agent_assets import CaseAssets
 from agent_tools import AgentTools
 from forensics import field_names, markdown_report
-from local_narrative import analyze_structured_case
+from runtime.run import run as run_agent
 from server.database import get_service
 from server.integration import asset_root, demo, demo_step, project
 
@@ -43,7 +43,7 @@ def require_case(service, case_id):
 def health(service=Depends(get_service)):
     return {"status": "ok", "database": "MongoDB via InvestigationService",
             "case_count": len(service.list_investigations()), "model_checked": False,
-            "runtime": "Deterministic evidence tools; optional OpenShell/Qwen review"}
+            "runtime": "OpenClaw → local Ollama → gpt-oss:20b"}
 
 
 @app.get("/api/cases")
@@ -83,27 +83,17 @@ def get_markdown_report(case_id: str, service=Depends(get_service)):
     if package["report"] is None:
         raise HTTPException(409, "A final report has not been saved yet")
     content = markdown_report(package["report"])
-    review = package["investigation"].get("ai_review")
-    if review:
-        content += "\n## Local Qwen interpretation — adjuster review required\n\n"
-        for key, label in (("weather", "Weather"), ("vegetation", "Vegetation"),
-                           ("crop", "Crop"), ("neighbors", "Neighbor fields"),
-                           ("overall", "Overall evidence")):
-            content += f"### {label}\n\n{review[key]}\n\n"
     return PlainTextResponse(content, media_type="text/markdown")
 
 
-@app.post("/api/cases/{case_id}/ai-review")
-def review_case_with_qwen(case_id: str, service=Depends(get_service)):
-    package = require_case(service, case_id)
-    if package["report"] is None:
-        raise HTTPException(409, "Save the measured evidence report before requesting a model review")
+@app.post("/api/cases/{case_id}/investigate")
+def investigate_case(case_id: str, service=Depends(get_service)):
+    require_case(service, case_id)
     try:
-        review = analyze_structured_case(project(service, case_id))
-    except Exception as exc:
-        raise HTTPException(503, f"OpenShell/Qwen review unavailable: {exc}") from exc
-    service.save_ai_review(case_id, review)
-    return {"ai_review": review}
+        run_agent(case_id)
+    except RuntimeError as exc:
+        raise HTTPException(503, "Local agent failed; inspect .runtime logs") from exc
+    return project(service, case_id)
 
 
 class TaskRequest(BaseModel):

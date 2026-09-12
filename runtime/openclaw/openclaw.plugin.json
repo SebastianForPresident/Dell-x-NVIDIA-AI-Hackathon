@@ -1,0 +1,23 @@
+{
+  "id": "crop-forensics",
+  "name": "Crop Forensics",
+  "contracts": {
+    "tools": [
+      "get_claim",
+      "check_crop_classification",
+      "check_rainfall",
+      "check_vegetation_change",
+      "compare_neighboring_fields",
+      "create_follow_up_task",
+      "set_case_status",
+      "save_investigation_report"
+    ]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}
