@@ -1,84 +1,88 @@
-# Crop Insurance Forensics
+# Fieldnote — Crop Insurance Forensics
 
-A local evidence assistant for crop-insurance adjusters. It reads a claim's field boundary, weather history, crop layer, and before/after imagery, then produces an auditable evidence package. It never approves or denies a claim.
+A local evidence assistant for crop insurance adjusters. A React dashboard presents case files, field geometry, rainfall and vegetation charts, source-backed findings, and a downloadable report. FastAPI performs deterministic geospatial checks; local MongoDB stores case metadata and evidence. Qwen, routed through NVIDIA OpenShell, can draft claim-field suggestions and report wording. The system never approves or denies a claim.
 
-## Run locally
+Every built-in case is **synthetic** and labeled as such. The demo weather, crop, imagery, farm names, and field polygons are fabricated; they are not NOAA, USDA, or satellite observations.
 
-Requires Python 3.12+.
+## Start the website on a development machine
+
+Requirements: Python 3.12+, Node 20.19+ or 22.12+, Docker with Compose. MongoDB runs in a local Docker container; no Atlas account is used.
 
 ```bash
+docker compose up -d mongo
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/streamlit run app.py
+cd frontend && npm install && npm run build && cd ..
+.venv/bin/uvicorn server.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open the local URL Streamlit prints. Choose **Synthetic demo** for a zero-file walkthrough, or **Upload case files** to analyze your own data. To generate a complete, clearly labeled synthetic upload folder:
+Open **http://127.0.0.1:8000**. The API seeds three synthetic case records into MongoDB only when the collection is empty. The website reads them from the API; there is no hard-coded frontend fallback. Existing records are preserved on restart. For frontend development, run `cd frontend && npm run dev` in a second terminal and open **http://127.0.0.1:5173**; Vite proxies `/api` to FastAPI.
 
-Streamlit is the website frontend: the Python process serves a browser UI at `http://127.0.0.1:8501`. Leave the terminal running while using the site; `Ctrl+C` stops it. React is optional and is not needed for the hackathon demo.
+The new-investigation form accepts a GeoJSON field boundary and optional weather CSV, crop layer, before/after rasters, and PDF. It saves the report, chart data, source file names, and SHA-256 hashes to MongoDB. Raw GeoTIFFs are processed from temporary files and discarded. PDF text is retained locally for optional Qwen field suggestions; the raw PDF is not retained.
+
+To generate a complete synthetic upload package:
 
 ```bash
 .venv/bin/python scripts/generate_sample_case.py
 ```
 
-Use `sample_case/` files with loss date **2026-07-18**, crop **Corn**, before date **2026-05-30**, after date **2026-08-12**, red band **1**, NIR band **2**. The sample data are fabricated and must not be presented as observations from NOAA, USDA, or a satellite.
+Use `sample_case/` files with loss date **2026-07-18**, crop **Corn**, before date **2026-05-30**, after date **2026-08-12**, red band **1**, and NIR band **2**.
 
-## Input contract
+## Input contract and interpretation
 
-| Input | Format | Use |
-| --- | --- | --- |
-| Claim | PDF, optional | Extract selectable text for manual verification of case fields. Scanned PDFs need OCR first. |
-| Field boundary | GeoJSON Polygon/MultiPolygon or FeatureCollection in EPSG:4326 | Select one claimed field; other supplied polygons are compared as other fields. |
-| Weather | CSV with `date,precipitation,normal_precipitation` | Dates are ISO `YYYY-MM-DD`; daily precipitation and matched normal use the selected mm/inches unit. `normal_precipitation` may be omitted, but deficit/excess will then be inconclusive. |
-| Crop layer | USDA CDL GeoTIFF | Dominant CDL pixel class within the field. Use a layer for the claim year. |
-| Before/after imagery | Two georeferenced GeoTIFFs | Mean NDVI from the selected red and NIR bands, sampled inside each polygon. Supply image dates in the UI. Both images should be comparable surface reflectance products with cloud/invalid pixels masked. |
+| Input | Expected format |
+| --- | --- |
+| Boundary | GeoJSON Polygon/MultiPolygon or FeatureCollection, EPSG:4326. The first feature is the claimed field in the upload form; other features are comparison fields. |
+| Weather | CSV with `date,precipitation,normal_precipitation`; ISO dates, daily values, and consistent mm/inches units. `normal_precipitation` may be omitted, but a deficit/excess conclusion then stays inconclusive. |
+| Crop layer | Georeferenced USDA CDL GeoTIFF, ideally for the claim year. |
+| Before/after imagery | Comparable georeferenced GeoTIFFs with red and NIR bands. Set their dates and band numbers in the form. Cloud and invalid pixels should already be masked. |
+| Claim | Optional selectable-text PDF. Scanned PDFs need OCR before field suggestions can work. |
 
-The report records every finding's status, source, and measured values. Missing inputs remain **unavailable**; insufficient or unbracketed evidence remains **inconclusive**. The 30-day weather window needs at least 80% daily coverage. Screening thresholds are **demo heuristics**, not underwriting or meteorological standards: drought rainfall ≤60% of supplied normal, flood rainfall ≥150%, and NDVI decline ≤−0.12. A flood rainfall check does not establish inundation, and NDVI decline does not establish a cause. The app does not validate whether a CSV is truly from NOAA or a crop layer is truly from USDA.
+The report marks each check **supported**, **contradicted**, **inconclusive**, or **unavailable** and retains measured values and source names. The 30-day weather window needs at least 80% daily coverage. Screening thresholds are hackathon heuristics, not insurance standards: drought rainfall ≤60% of supplied normal, flood rainfall ≥150%, and NDVI decline ≤−0.12. Rainfall does not prove inundation, and vegetation decline does not prove a cause. No claim decision is made.
 
-## Dell Pro Max with GB10 / OpenShell
+## Dell Pro Max with GB10: OpenShell + local MongoDB + Qwen
 
-The deterministic GIS calculations run without a model. The claim-field suggestion and narrative buttons call only `https://inference.local/v1/chat/completions`, which must be routed by OpenShell to a model running on the same GB10. Claim-field extraction sends selectable PDF text to that local endpoint; the narrative sends only structured evidence. Model suggestions and wording are not the source of record. There are no cloud LLM calls in the runtime code.
+The runtime architecture is:
 
-Prepare [OpenShell](https://docs.nvidia.com/openshell/get-started/quickstart) and Ollama on the GB10 while network access is available. NVIDIA's [host Ollama tutorial](https://docs.nvidia.com/openshell/get-started/tutorials/inference-ollama) documents routing `inference.local` to Ollama. Use a local Qwen tag without `:cloud`; `qwen3.5` is the suggested demo model, while `qwen3.5:0.8b` is a smaller smoke-test option. On the GB10 host, start Ollama and configure the route:
+```text
+Browser → React served by FastAPI inside OpenShell → local MongoDB on GB10 host
+                                                ↘ inference.local → Ollama/Qwen on GB10 host
+```
+
+Prepare the model, Docker images, and build dependencies while connected. Use a Qwen model **without** a `:cloud` suffix. The app itself calls only `https://inference.local/v1/chat/completions` for inference; OpenShell routes that to the host Ollama provider. The deterministic evidence tools still work when Qwen is unavailable. See NVIDIA's [OpenShell quickstart](https://docs.nvidia.com/openshell/get-started/quickstart), [local Ollama tutorial](https://docs.nvidia.com/openshell/get-started/tutorials/inference-ollama), and [native TCP policy guidance](https://docs.nvidia.com/openshell/sandboxes/policies).
+
+On the GB10 host:
 
 ```bash
+docker compose up -d mongo
 ollama pull qwen3.5
 OLLAMA_HOST=0.0.0.0:11434 ollama serve
 ```
 
-In another host terminal, after the OpenShell gateway is running:
+If Ollama already runs as a service, use that service and ensure the OpenShell gateway can reach it. In another terminal, with an active OpenShell gateway:
 
 ```bash
 openshell provider create --name ollama --type openai --credential OPENAI_API_KEY=empty --config OPENAI_BASE_URL=http://host.openshell.internal:11434/v1
 openshell inference set --provider ollama --model qwen3.5
 openshell inference get
+openshell sandbox create --from . --policy ./openshell-policy.yaml --name crop-forensics --detach
+openshell sandbox exec -n crop-forensics --workdir /app -- python3 scripts/gb10_preflight.py
+openshell sandbox exec -n crop-forensics --workdir /app -- python3 -m uvicorn server.main:app --host 127.0.0.1 --port 8000
 ```
 
-The `Dockerfile` builds the Python dependencies into an OpenShell base image on the GB10. This needs network during image build, but the resulting case investigation uses local files and local inference. From the repo directory on the GB10:
+The local `Dockerfile` builds React and Python dependencies into the OpenShell sandbox image. `openshell-policy.yaml` grants the Python process native TCP access **only** to `host.openshell.internal:27017` for MongoDB; `inference.local` is handled by OpenShell. Start the final API command in one terminal. In another terminal:
 
 ```bash
-openshell sandbox create --from . --name crop-forensics --detach
-openshell sandbox upload crop-forensics app.py /sandbox/app.py
-openshell sandbox upload crop-forensics forensics.py /sandbox/forensics.py
-openshell sandbox upload crop-forensics local_narrative.py /sandbox/local_narrative.py
-openshell sandbox upload crop-forensics visuals.py /sandbox/visuals.py
-openshell sandbox exec -n crop-forensics -- mkdir -p /sandbox/.streamlit
-openshell sandbox upload crop-forensics .streamlit/config.toml /sandbox/.streamlit/config.toml
-openshell sandbox exec -n crop-forensics -- mkdir -p /sandbox/scripts
-openshell sandbox upload crop-forensics scripts/gb10_preflight.py /sandbox/scripts/gb10_preflight.py
-openshell sandbox exec -n crop-forensics --workdir /sandbox -- python3 scripts/gb10_preflight.py
-openshell sandbox exec -n crop-forensics --workdir /sandbox -- python3 -m streamlit run app.py --server.address 127.0.0.1 --server.port 8501
+openshell forward start 8000 crop-forensics
 ```
 
-Run the final command in one terminal, then from another terminal use `openshell forward start 8501 crop-forensics` and open the printed URL. Click **Test local model route** in the sidebar before demonstrating PDF extraction or narrative drafting. [OpenShell's sandbox docs](https://docs.nvidia.com/openshell/sandboxes/manage-sandboxes) document image creation, upload, exec, and port forwarding. OpenShell and Ollama are not installed in this development environment, so the GB10 path still needs on-device verification.
+Open the printed URL and use **System status → Test model route** before the Qwen demo. The OpenShell/GB10 sequence must be verified on the event hardware; OpenShell and Ollama are not installed in this development environment.
 
-## Verification
+## Checks
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
+cd frontend && npm run build
 ```
 
-Tests exercise weather coverage and cause-specific thresholds, CSV unit conversion, raster field sampling, CDL classification, and image-date handling. The generated synthetic upload folder has also been processed end-to-end through the evidence functions.
-
-## Next steps for a production pilot
-
-Add cloud/shadow masks and image quality metrics, field-level crop rotation checks, authoritative weather station metadata and normals, flood-specific surface-water evidence, input hashes, and human review controls before operational use. Those are outside this hackathon MVP.
+Tests cover weather coverage and cause-specific thresholds, CSV unit conversion, raster field sampling, CDL classification, image-date handling, synthetic seed integrity, and the fixed OpenShell inference endpoint. The React production bundle is built locally.
