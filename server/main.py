@@ -1,18 +1,15 @@
-"""Local FastAPI backend: MongoDB records, forensic tools, and Qwen via OpenShell."""
+"""React API backed exclusively by InvestigationService; no model inference."""
 
-from contextlib import asynccontextmanager
-from datetime import date, datetime
-import hashlib
-import io
+from datetime import date
 import os
 from pathlib import Path
-import tempfile
+from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pypdf import PdfReader
-from pymongo.errors import DuplicateKeyError, PyMongoError
+from pydantic import BaseModel, ConfigDict, Field
+from pymongo.errors import PyMongoError
 
 from forensics import (
     Finding, build_report, crop_finding, field_names, load_boundary, markdown_report,
@@ -61,25 +58,41 @@ async def _save_raster(upload: UploadFile | None, folder: Path, name: str) -> tu
 
 
 @app.get("/api/health")
-def health():
-    try:
-        client.admin.command("ping")
-    except PyMongoError as exc:
-        raise HTTPException(status_code=503, detail=f"Local MongoDB unavailable: {exc}") from exc
-    return {"status": "ok", "database": "local MongoDB", "case_count": cases.count_documents({}),
-            "model_route": "https://inference.local", "model_checked": False}
+def health(service=Depends(get_service)):
+    return {"status": "ok", "database": "MongoDB via InvestigationService",
+            "case_count": len(service.list_investigations()), "model_checked": False,
+            "runtime": "OpenClaw integration pending; no inference enabled"}
 
 
 @app.get("/api/cases")
-def list_cases():
-    return list(cases.find({}, {"_id": 0, "claim_text": 0}).sort("created_at", -1))
+def list_cases(service=Depends(get_service)):
+    return [project(service, row["_id"]) for row in service.list_investigations()]
+
+
+@app.post("/api/demo", status_code=201)
+def create_demo(service=Depends(get_service)):
+    return project(service, demo(service).investigation_id)
+
+
+@app.post("/api/demo/reset", status_code=201)
+def new_demo_run(service=Depends(get_service)):
+    # A fresh run preserves the previous report, tasks, and audit history.
+    return project(service, demo(service, fresh=True).investigation_id)
 
 
 @app.get("/api/cases/{case_id}")
-def get_case(case_id: str):
-    doc = _get_case(case_id)
-    doc.pop("claim_text", None)
-    return doc
+def get_case(case_id: str, service=Depends(get_service)):
+    require_case(service, case_id)
+    return project(service, case_id)
+
+
+@app.post("/api/cases/{case_id}/demo-step")
+def run_demo_step(case_id: str, service=Depends(get_service)):
+    require_case(service, case_id)
+    result = demo_step(service, case_id)
+    if not result["ok"]:
+        raise HTTPException(422, result["error"])
+    return project(service, case_id)
 
 
 @app.get("/api/cases/{case_id}/report.md")
@@ -139,165 +152,60 @@ def claim_suggestions(case_id: str):
 
 @app.post("/api/cases/analyze", status_code=201)
 async def analyze_case(
-    claim_id: str = Form(...),
-    farm: str = Form(...),
-    location: str = Form("Location not supplied"),
-    cause: str = Form(...),
-    crop: str = Form(...),
-    loss_date: date = Form(...),
-    acreage: int = Form(0),
-    before_date: date = Form(...),
-    after_date: date = Form(...),
-    red_band: int = Form(1),
-    nir_band: int = Form(2),
-    weather_unit: str = Form("mm"),
-    synthetic_demo: bool = Form(False),
-    selected_field: int = Form(0),
-    boundary: UploadFile = File(...),
-    weather: UploadFile | None = File(None),
-    crop_layer: UploadFile | None = File(None),
-    before_image: UploadFile | None = File(None),
-    after_image: UploadFile | None = File(None),
-    claim_pdf: UploadFile | None = File(None),
+    claim_id: str = Form(...), farm: str = Form(...), location: str = Form("Location not supplied"),
+    cause: str = Form(...), crop: str = Form(...), loss_date: date = Form(...), acreage: int = Form(0),
+    before_date: date = Form(...), after_date: date = Form(...), red_band: int = Form(1), nir_band: int = Form(2),
+    weather_unit: str = Form("mm"), synthetic_demo: bool = Form(False), selected_field: int = Form(0),
+    boundary: UploadFile = File(...), weather: UploadFile | None = File(None),
+    crop_layer: UploadFile | None = File(None), before_image: UploadFile | None = File(None),
+    after_image: UploadFile | None = File(None), claim_pdf: UploadFile | None = File(None),
+    service=Depends(get_service),
 ):
-    claim_id = claim_id.strip()
-    if not claim_id or not farm.strip():
-        raise HTTPException(status_code=422, detail="Claim ID and farm name are required")
-    if cases.find_one({"id": claim_id}, {"_id": 1}):
-        raise HTTPException(status_code=409, detail="Claim ID already exists")
-    if red_band < 1 or nir_band < 1 or red_band == nir_band:
-        raise HTTPException(status_code=422, detail="Red and NIR bands must be distinct positive indices")
-    if weather_unit not in {"mm", "inches"}:
-        raise HTTPException(status_code=422, detail="Weather unit must be mm or inches")
-    if acreage < 0:
-        raise HTTPException(status_code=422, detail="Acreage cannot be negative")
-    if before_date >= after_date:
-        raise HTTPException(status_code=422, detail="Before image date must precede after image date")
-
-    try:
-        boundary_bytes = await _read_small(boundary)
-        features = load_boundary(boundary_bytes)
-        if not 0 <= selected_field < len(features):
-            raise ValueError("Selected field index is outside the GeoJSON feature list")
-    except (ValueError, KeyError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    geometry = features[selected_field]["geometry"]
-    finding_list: list[Finding] = []
-    weather_series = []
-    ndvi_series = []
-    documents = [boundary.filename]
-    file_hashes = {boundary.filename: hashlib.sha256(boundary_bytes).hexdigest()}
-    claim_text = None
-
-    if claim_pdf is not None:
-        pdf_bytes = await _read_small(claim_pdf, 20_000_000)
-        documents.append(claim_pdf.filename)
-        file_hashes[claim_pdf.filename] = hashlib.sha256(pdf_bytes).hexdigest()
-        try:
-            claim_text = "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(pdf_bytes)).pages)[:16000]
-        except Exception:
-            claim_text = None
-
-    weather_bytes = await _read_small(weather)
-    if weather_bytes is not None:
-        documents.append(weather.filename)
-        file_hashes[weather.filename] = hashlib.sha256(weather_bytes).hexdigest()
-        try:
-            weather_rows = parse_weather(weather_bytes, weather_unit)
-            weather_series = [{"date": row["date"].isoformat(),
-                               "rainfall": round(row["precipitation_mm"], 2),
-                               "normal": round(row["normal_mm"], 2) if row["normal_mm"] is not None else None}
-                              for row in weather_rows]
-            finding_list.append(weather_finding(weather_rows, loss_date, cause=cause))
-            finding_list[-1].source = weather.filename
-        except ValueError as exc:
-            finding_list.append(Finding("Precipitation", "unavailable", str(exc), weather.filename, {}))
+    if not claim_id.strip() or not farm.strip() or acreage < 0 or before_date >= after_date:
+        raise HTTPException(422, "Nonempty claim/farm, nonnegative acreage and ordered image dates required")
+    bundle = uuid4().hex
+    folder = asset_root() / bundle
+    folder.mkdir()
+    names = {}
+    for key, upload, name in (("boundary", boundary, "boundary.geojson"), ("weather", weather, "weather.csv"),
+                              ("crop", crop_layer, "crop.tif"), ("before", before_image, "before.tif"),
+                              ("after", after_image, "after.tif")):
+        names[key] = await save_upload(upload, folder, name, 256_000_000 if name.endswith(".tif") else 8_000_000)
+    await save_upload(claim_pdf, folder, "claim.pdf", 20_000_000)
+    assets = CaseAssets(folder, **names, before_date=before_date.isoformat(), after_date=after_date.isoformat(),
+                        red_band=red_band, nir_band=nir_band, selected_field=selected_field, weather_unit=weather_unit)
+    fields, _ = assets.fields()
+    uploads = (boundary, weather, crop_layer, before_image, after_image, claim_pdf)
+    synthetic = synthetic_demo or any(u and "SYNTHETIC" in (u.filename or "").upper() for u in uploads)
+    tools = AgentTools.start(service, {"claim_id": claim_id.strip(), "farm": farm.strip(), "location": location,
+        "reported_cause": cause, "claimed_crop": crop, "reported_loss_date": loss_date.isoformat(),
+        "field": field_names(fields)[selected_field], "acreage": acreage, "synthetic_demo": synthetic,
+        "asset_bundle": bundle, "origin": "upload"}, assets, actor="demo")
+    # Preserve explicit upload analysis as deterministic application behavior, not AI.
+    errors = []
+    for name in ("check_crop_classification", "check_rainfall", "check_vegetation_change", "compare_neighboring_fields"):
+        result = tools.invoke(name, {}, f"upload:{name}")
+        if not result["ok"]:
+            errors.append(name)
+    if not errors:
+        tools.invoke("save_investigation_report", {}, "upload:report")
+    package = service.load_package(tools.investigation_id)
+    issues = errors + [e["finding"]["check"] for e in package["evidence"] if e["finding"]["status"] != "supported"]
+    if issues:
+        tools.invoke("create_follow_up_task", {"title": "Review incomplete or conflicting evidence",
+                     "reason": "; ".join(issues)}, "upload:followup")
     else:
-        finding_list.append(Finding("Precipitation", "unavailable", "No weather CSV supplied.", "No source", {}))
-
-    with tempfile.TemporaryDirectory() as temp:
-        folder = Path(temp)
-        crop_path, crop_hash = await _save_raster(crop_layer, folder, "crop.tif")
-        before_path, before_hash = await _save_raster(before_image, folder, "before.tif")
-        after_path, after_hash = await _save_raster(after_image, folder, "after.tif")
-        for upload, digest in [(crop_layer, crop_hash), (before_image, before_hash), (after_image, after_hash)]:
-            if upload is not None:
-                documents.append(upload.filename)
-                file_hashes[upload.filename] = digest
-
-        if crop_path:
-            try:
-                finding_list.append(crop_finding(crop_path, geometry, crop))
-                finding_list[-1].source = crop_layer.filename
-            except Exception as exc:
-                finding_list.append(Finding("Crop type", "unavailable", str(exc), crop_layer.filename, {}))
-        else:
-            finding_list.append(Finding("Crop type", "unavailable", "No crop layer supplied.", "No source", {}))
-
-        neighbor_changes = []
-        if before_path and after_path:
-            try:
-                before = ndvi_mean(before_path, geometry, red_band, nir_band)
-                after = ndvi_mean(after_path, geometry, red_band, nir_band)
-                finding_list.append(vegetation_finding(before, after, before_date, after_date,
-                                                       loss_date, f"{before_image.filename}; {after_image.filename}"))
-                if before is not None and after is not None:
-                    ndvi_series = [{"date": before_date.isoformat(), "ndvi": round(before, 3)},
-                                   {"date": after_date.isoformat(), "ndvi": round(after, 3)}]
-                for index, feature in enumerate(features):
-                    if index == selected_field:
-                        continue
-                    try:
-                        prior = ndvi_mean(before_path, feature["geometry"], red_band, nir_band)
-                        later = ndvi_mean(after_path, feature["geometry"], red_band, nir_band)
-                        if prior is not None and later is not None:
-                            neighbor_changes.append(later - prior)
-                    except ValueError:
-                        continue
-            except Exception as exc:
-                finding_list.append(Finding("Vegetation change", "unavailable", str(exc),
-                                            f"{before_image.filename}; {after_image.filename}", {}))
-        else:
-            finding_list.append(Finding("Vegetation change", "unavailable",
-                                        "Both before and after imagery are required.", "No valid image pair", {}))
-        finding_list.append(neighbors_finding(neighbor_changes))
-
-    is_synthetic = synthetic_demo or any("SYNTHETIC" in name.upper() for name in documents)
-    report = build_report(claim_id, cause, loss_date, field_names(features)[selected_field], finding_list,
-                          demo=is_synthetic)
-    counts = report["evidence_summary"]
-    status = "Evidence ready" if counts["inconclusive"] == counts["unavailable"] == 0 else "Needs review"
-    doc = {
-        "id": claim_id, "farm": farm.strip(), "location": location.strip(), "crop": crop,
-        "cause": cause, "loss_date": loss_date.isoformat(), "acreage": acreage,
-        "created_at": datetime.now().date().isoformat(), "status": status,
-        "synthetic_demo": is_synthetic, "origin": "upload", "boundary": {"type": "FeatureCollection", "features": features},
-        "selected_field": selected_field, "weather_series": weather_series, "ndvi_series": ndvi_series,
-        "report": report, "narrative": None, "documents": documents,
-        "file_hashes": file_hashes, "claim_text": claim_text,
-        "workflow": [
-            {"stage": "Claim intake", "detail": "Claim fields recorded", "state": "complete"},
-            {"stage": "Weather review", "detail": "Precipitation evidence evaluated", "state": "complete"},
-            {"stage": "Crop verification", "detail": "Crop layer evaluated", "state": "complete"},
-            {"stage": "Imagery comparison", "detail": "Field and supplied comparison polygons evaluated", "state": "complete"},
-            {"stage": "Evidence package", "detail": "Structured report saved to local MongoDB", "state": "complete"},
-        ],
-    }
-    try:
-        cases.insert_one(doc)
-    except DuplicateKeyError as exc:
-        raise HTTPException(status_code=409, detail="Claim ID already exists") from exc
-    doc.pop("_id", None)
-    doc.pop("claim_text", None)
-    return doc
+        tools.invoke("set_case_status", {"status": "READY_FOR_ADJUSTER_REVIEW",
+                     "reason": "Deterministic upload checks completed; human review required"}, "upload:ready")
+    return project(service, tools.investigation_id)
 
 
 STATIC_DIR = Path(os.getenv("STATIC_DIR", Path(__file__).resolve().parents[1] / "frontend" / "dist"))
-if STATIC_DIR.exists():
+if (STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
 
     @app.get("/{path:path}")
     def frontend(path: str):
         if path.startswith("api/"):
-            raise HTTPException(status_code=404, detail="Not found")
+            raise HTTPException(404, "Not found")
         return FileResponse(STATIC_DIR / "index.html")

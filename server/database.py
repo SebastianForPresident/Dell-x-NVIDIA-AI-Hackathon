@@ -1,10 +1,9 @@
-"""MongoDB connection and intentionally synthetic demo seeding."""
+"""One canonical MongoDB configuration and authoritative business service."""
 
-import os
+from functools import lru_cache
 
-from pymongo import MongoClient
-
-from server.seed import demo_cases
+from investigations import InvestigationService
+from persistence import MongoStore
 
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017")

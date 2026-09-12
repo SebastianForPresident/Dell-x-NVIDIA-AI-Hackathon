@@ -133,6 +133,13 @@ export default function App() {
       .finally(() => setLoading(false))
   }, [])
 
+  useEffect(() => {
+    let live = true
+    const timer = setInterval(() => api('/api/cases').then(rows => { if (live) { setCases(rows); setActionError('') } })
+      .catch(err => { if (live) setActionError(err.message) }), 5000)
+    return () => { live = false; clearInterval(timer) }
+  }, [])
+
   const selected = cases.find(item => item.id === selectedId) || cases[0]
   const readyCount = cases.filter(item => item.status === 'Evidence ready').length
   const reviewCount = cases.filter(item => item.status !== 'Evidence ready').length

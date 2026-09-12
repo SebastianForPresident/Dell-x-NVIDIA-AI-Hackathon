@@ -1,5 +1,11 @@
 # Agent-facing assembly layer
 
+**Assembly update:** React/FastAPI now uses these investigation records directly.
+See [ASSEMBLY.md](ASSEMBLY.md) for current endpoints, retained assets, and startup.
+The incoming-frontend-gap section below describes the earlier milestone and is
+superseded by that handoff. Tool schemas/invoke remain compatible; trusted callers
+may specify `actor="demo"` for explicit deterministic runs (default remains agent).
+
 Started at `e64e53350eef8732f278ca408a8279cb1e0eae8e`. During implementation,
 upstream advanced through `75eddca` to `a1159f043f2951f7202d6497ce94a66181d6dcc9`.
 Those React/FastAPI changes were fast-forwarded without conflicts or overwriting

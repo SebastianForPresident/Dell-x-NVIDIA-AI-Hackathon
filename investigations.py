@@ -18,6 +18,9 @@ class InvestigationService:
     def get_claim(self, claim_id):
         return self.store.get("claims", claim_id)
 
+    def list_investigations(self, limit=100):
+        return self.store.list_investigations(limit)
+
     def get_recorded_action(self, investigation_id, action_key):
         self._investigation(investigation_id)
         return self.store.get("agent_actions", stable_id(investigation_id, "action", action_key))
@@ -114,7 +117,7 @@ class InvestigationService:
             if self.store.db.follow_up_tasks.count_documents({"investigation_id": investigation_id,
                                                               "status": "OPEN"}):
                 raise ValueError("Resolve open follow-up tasks before marking ready.")
-            if actor == "agent":
+            if actor in {"agent", "demo"}:
                 package = self.load_package(investigation_id)
                 report = package["report"]
                 evidence = package["evidence"]
@@ -125,7 +128,7 @@ class InvestigationService:
                     raise ValueError("Publish a current agent evidence report before marking ready.")
                 if any(entry["finding"]["status"] != "supported" for entry in evidence):
                     raise ValueError("Missing, inconclusive, or conflicting evidence needs human follow-up.")
-        if actor == "agent":
+        if actor in {"agent", "demo"}:
             allowed = {
                 "NEW": {"INVESTIGATING"},
                 "INVESTIGATING": {"NEEDS_EVIDENCE", "READY_FOR_ADJUSTER_REVIEW"},
