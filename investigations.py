@@ -18,6 +18,31 @@ class InvestigationService:
     def get_claim(self, claim_id):
         return self.store.get("claims", claim_id)
 
+    def get_recorded_action(self, investigation_id, action_key):
+        self._investigation(investigation_id)
+        return self.store.get("agent_actions", stable_id(investigation_id, "action", action_key))
+
+    def publish_agent_report(self, investigation_id):
+        """Assemble only persisted findings; the model cannot supply measured facts."""
+        from datetime import date
+        from forensics import Finding, build_report
+
+        package = self.load_package(investigation_id)
+        record = package["investigation"]
+        findings = [entry["finding"] for entry in package["evidence"]]
+        required = {"Crop type", "Precipitation", "Vegetation change", "Other supplied fields"}
+        if {f["check"] for f in findings} != required or len(findings) != len(required):
+            raise ValueError("Inspect all four evidence categories exactly once before publishing a report.")
+        metadata = record["metadata"]
+        report = build_report(record["claim_id"], metadata["reported_cause"],
+                              date.fromisoformat(metadata["reported_loss_date"]), metadata["field"],
+                              [Finding(**f) for f in findings], demo=metadata["synthetic_demo"])
+        report["evidence_ids"] = sorted(entry["_id"] for entry in package["evidence"])
+        report_id = self.save_report(investigation_id, report)
+        self.store.db.investigations.update_one({"_id": investigation_id}, {"$set": {
+            "report_id": report_id, "persistence_complete": True, "updated_at": utcnow()}})
+        return {"report_id": report_id, "report": report}
+
     def _investigation(self, investigation_id):
         record = self.store.get("investigations", investigation_id)
         if record is None:
@@ -75,7 +100,8 @@ class InvestigationService:
             "_id": key, "investigation_id": investigation_id, "title": title,
             "reason": reason, "status": "OPEN", "actor": actor, "created_at": utcnow(),
         })
-        self.set_case_status(investigation_id, "NEEDS_EVIDENCE", reason, actor)
+        if self.store.get("follow_up_tasks", key)["status"] == "OPEN":
+            self.set_case_status(investigation_id, "NEEDS_EVIDENCE", reason, actor)
         return key
 
     def set_case_status(self, investigation_id, status, reason, actor="human"):
@@ -88,6 +114,26 @@ class InvestigationService:
             if self.store.db.follow_up_tasks.count_documents({"investigation_id": investigation_id,
                                                               "status": "OPEN"}):
                 raise ValueError("Resolve open follow-up tasks before marking ready.")
+            if actor == "agent":
+                package = self.load_package(investigation_id)
+                report = package["report"]
+                evidence = package["evidence"]
+                required = {"Crop type", "Precipitation", "Vegetation change", "Other supplied fields"}
+                if (not report or len(evidence) != 4 or
+                        {entry["finding"]["check"] for entry in evidence} != required or
+                        report.get("evidence_ids") != sorted(entry["_id"] for entry in evidence)):
+                    raise ValueError("Publish a current agent evidence report before marking ready.")
+                if any(entry["finding"]["status"] != "supported" for entry in evidence):
+                    raise ValueError("Missing, inconclusive, or conflicting evidence needs human follow-up.")
+        if actor == "agent":
+            allowed = {
+                "NEW": {"INVESTIGATING"},
+                "INVESTIGATING": {"NEEDS_EVIDENCE", "READY_FOR_ADJUSTER_REVIEW"},
+                "NEEDS_EVIDENCE": {"INVESTIGATING", "READY_FOR_ADJUSTER_REVIEW"},
+                "READY_FOR_ADJUSTER_REVIEW": {"NEEDS_EVIDENCE"},
+            }
+            if status != record["status"] and status not in allowed.get(record["status"], set()):
+                raise ValueError(f"Invalid agent transition: {record['status']} -> {status}.")
         if record["status"] == status:
             return
         now = utcnow()

@@ -1,13 +1,17 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import mongomock
-from streamlit.testing.v1 import AppTest
+if (Path(__file__).resolve().parents[1] / "app.py").exists():
+    from streamlit.testing.v1 import AppTest
 
 from investigations import InvestigationService
 from persistence import MongoStore
 
 
+@unittest.skipUnless((Path(__file__).resolve().parents[1] / "app.py").exists(),
+                     "Upstream replaced the Streamlit app with React/FastAPI")
 class PersistenceUITests(unittest.TestCase):
     def test_demo_save_and_reopen_in_fresh_session(self):
         service = InvestigationService(MongoStore(mongomock.MongoClient().ui_test))
